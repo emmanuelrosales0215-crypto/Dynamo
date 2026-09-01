@@ -111,6 +111,7 @@ const doc = new Document({
 
         // ---- addressee ------------------------------------------------------
         body("San Antonio Water System", { after: 0 }),
+        body("Attn: USA Requests", { after: 0 }),
         body("2800 US Hwy 281 North", { after: 0 }),
         body("San Antonio, Texas 78212", { after: 320 }),
 
@@ -133,6 +134,14 @@ const doc = new Document({
         body(
           "This letter lists the general requirements necessary to obtain a Utility Service " +
             `Agreement (USA) for water and sanitary sewer service for the above-referenced project, ${P}.`,
+          { after: 160 }
+        ),
+        body(
+          `A USA is required for this tract because it ${P} (select applicable: is over or involved with the ` +
+            "Edwards Aquifer Recharge or Contributing Zone; is within the Camp Bullis Awareness Zone; is over " +
+            "50 acres; involves SAWS oversize reimbursement; is outside SAWS\u2019 certified service area; requires " +
+            "over 50 EDUs; requires a main extension of 300 linear feet or more; involves impact fee credits, " +
+            "pro-rata refund, or phased development).",
           { after: 240 }
         ),
 
@@ -154,11 +163,11 @@ const doc = new Document({
         // c. Developer
         item(1, [{ text: "Developer", bold: true }], { after: 60 }),
         sub(`Entity: ${P}`, { after: 0 }),
-        sub(`Attn.: ${P}`, { after: 0 }),
+        sub(`Attn.: ${P} (contact person who will sign the USA document)`, { after: 0 }),
         sub(`Address: ${P}`, { after: 160 }),
 
         // d. Location Map
-        item(1, label("Location Map — ", `The site is located within Ferguson Map Grid ${P} (see enclosed Vicinity Exhibit).`)),
+        item(1, label("Location Map — ", `The site is located within Ferguson Map Grid ${P}. Tract boundaries are clearly outlined (see enclosed Vicinity Exhibit).`)),
 
         // e. Site Map with Elevation Contours
         item(1, [{ text: "Site Map with Elevation Contours", bold: true }], { after: 60 }),
@@ -180,15 +189,16 @@ const doc = new Document({
 
         // h. Fire Flow
         item(1, [{ text: "Statement of Fire Flow Required", bold: true }], { after: 60 }),
-        sub(`Residential: ${P} GPM (to be confirmed)`, { after: 0 }),
-        sub(`Commercial: ${P} GPM (to be confirmed)`, { after: 160 }),
+        sub("Per SAWS criteria: average house <3,600 sq ft = 1,000 GPM; average house >3,600 sq ft = 1,500 GPM; commercial = 2,000 GPM.", { after: 60 }),
+        sub(`Required for this project: ${P} GPM (${P} use type)`, { after: 160 }),
 
         // i. Proposed Source of Service
         item(1, [{ text: "Proposed Source of Service", bold: true }], { after: 60 }),
         sub("Water", { indent: 1.25, bold: true, after: 60 }),
         sub(
           `Water service is proposed by connection to an existing ${P}" ${P} water main located within ` +
-            `the ${P} right-of-way, constructed under SAWS Job No. ${P}. ${P} (Describe any required bores, ` +
+            `the ${P} right-of-way, constructed under SAWS Job No. ${P}. Point(s) of connection: ${P}. ` +
+            `${P} (Describe any required bores, ` +
             `crossings, or looping requirements.) Reference SAWS Water Block Map ${P}, which is stamped ` +
             `"${P}." (Please see enclosed SAWS Block Maps)`,
           { after: 160 }
@@ -196,7 +206,8 @@ const doc = new Document({
         sub("Sanitary Sewer", { indent: 1.25, bold: true, after: 60 }),
         sub(
           `Sanitary sewer service is proposed by connection to an existing ${P}" ${P} sanitary sewer main ` +
-            `located within the ${P} right-of-way, constructed under SAWS Job No. ${P}. ${P} (Describe any ` +
+            `located within the ${P} right-of-way, constructed under SAWS Job No. ${P}. Point(s) of connection: ` +
+            `${P}. Proposed slope: ${P}%. ${P} (Describe any ` +
             `required bores, crossings, or off-site extensions.) Reference SAWS Sewer Block Map ${P}, which ` +
             `is stamped "${P}." (Please see enclosed SAWS Block Maps)`,
           { after: 160 }
@@ -210,9 +221,9 @@ const doc = new Document({
         // ================= 2. PROOF OF OWNERSHIP =============================
         item(0, [{ text: "Proof of Ownership", bold: true }], { after: 60 }),
         body(
-          `(General Warranty Deed dated ${P}, from ${P}, Grantor, to ${P}, Grantee, recorded as ` +
-            `Document No. ${P}, Official Public Records of Bexar County, Texas — see enclosed General ` +
-            `Warranty Deed.)`,
+          `(${P} (General Warranty Deed / Contract for Purchase / Earnest Money Contract) dated ${P}, ` +
+            `from ${P}, Grantor, to ${P}, Grantee, recorded as Document No. ${P}, Official Public Records ` +
+            `of Bexar County, Texas — see enclosed proof of ownership.)`,
           { indent: 0.25, after: 240 }
         ),
 
@@ -240,11 +251,12 @@ const doc = new Document({
 
         // ---- enclosures -----------------------------------------------------
         body("Enclosures:", { bold: true, after: 60 }),
+        body('Cover Sheet ("USA Request" and Project Name)', { indent: 0.25, after: 0 }),
         body("Vicinity Exhibit", { indent: 0.25, after: 0 }),
         body("Aerial with Contours Exhibit", { indent: 0.25, after: 0 }),
         body("EDU Calculations", { indent: 0.25, after: 0 }),
         body("SAWS Block Maps", { indent: 0.25, after: 0 }),
-        body("General Warranty Deed", { indent: 0.25, after: 0 }),
+        body("Proof of Ownership (deed / contract)", { indent: 0.25, after: 0 }),
       ],
     },
   ],
