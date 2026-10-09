@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redline</title>
+<style>
+:root{--bg:#f4f5f7;--panel:#fff;--text:#1d2330;--muted:#667085;--line:#d9dde5;--accent:#1f5fd6;--red:#d92d20}
+@media (prefers-color-scheme:dark){:root{--bg:#14171d;--panel:#1d222b;--text:#e8ebf0;--muted:#9aa4b2;--line:#323a47;--accent:#6c9cff;--red:#ff6b5e}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,sans-serif;height:100vh;display:flex;flex-direction:column}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:16px;margin:0 8px 0 0}
+button,input,select{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 10px}
+button{cursor:pointer}button:hover{border-color:var(--accent)}
+button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+button:disabled{opacity:.5;cursor:default}
+.sep{width:1px;height:22px;background:var(--line)}
+main{flex:1;display:flex;min-height:0}
+#stage{flex:1;overflow:auto;padding:16px;display:flex;align-items:flex-start}
+#sheet{position:relative;margin:0 auto;flex:none;box-shadow:0 2px 12px rgba(0,0,0,.25);background:#fff;display:none}
+#sheet img{display:block;user-select:none;-webkit-user-drag:none}
+#overlay{position:absolute;inset:0}
+.mk{position:absolute;border:2px solid var(--red);cursor:pointer}
+.mk.Cloud{border-style:dashed;border-radius:14px}
+.mk.sel{outline:3px solid var(--accent)}
+.mk.Completed,.mk.Accepted{opacity:.45}
+.mk.Rejected,.mk.Canceled{opacity:.45;border-color:#888}
+#draft{position:absolute;border:2px dotted var(--accent);background:rgba(31,95,214,.12);pointer-events:none}
+aside{width:320px;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+aside h2{font-size:13px;margin:0;padding:10px 12px;border-bottom:1px solid var(--line);color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+#list{flex:1;overflow:auto}
+.item{padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+.item.sel{background:rgba(31,95,214,.14)}
+.item b{display:block}.item small{color:var(--muted)}
+.badge{display:inline-block;padding:0 6px;border-radius:9px;border:1px solid var(--line);font-size:12px;margin-left:6px}
+#detail{padding:10px 12px;border-top:1px solid var(--line);display:none}
+#detail select{width:100%;margin-top:6px}
+#msg{color:var(--muted);padding:0 4px}
+.empty{margin:0 auto;padding:24px;color:var(--muted);text-align:center}
+@media (max-width:760px){main{flex-direction:column}aside{width:auto;height:40%;border-left:0;border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Redline</h1>
+  <input type="file" id="file" accept="application/pdf">
+  <div class="sep"></div>
+  <button id="prev" disabled>&lsaquo;</button>
+  <span id="pageLabel">&ndash;</span>
+  <button id="next" disabled>&rsaquo;</button>
+  <select id="zoom" title="Zoom"><option value="60">60%</option><option value="100" selected>100%</option><option value="150">150%</option><option value="200">200%</option></select>
+  <div class="sep"></div>
+  <button data-tool="select" class="on">Select</button>
+  <button data-tool="cloud">Cloud</button>
+  <button data-tool="text">Text</button>
+  <button data-tool="stamp">Stamp</button>
+  <input id="note" placeholder="Note / stamp text" size="18">
+  <input id="author" placeholder="Author" size="10">
+  <div class="sep"></div>
+  <a id="download" href="#"><button disabled id="dlbtn">Download PDF</button></a>
+  <span id="msg"></span>
+</header>
+<main>
+  <div id="stage">
+    <div class="empty" id="hint">Upload a drawing PDF to start redlining.</div>
+    <div id="sheet"><img id="img" alt="Drawing sheet"><div id="overlay"></div></div>
+  </div>
+  <aside>
+    <h2>Markups on this sheet</h2>
+    <div id="list"></div>
+    <div id="detail">
+      <b id="dTitle"></b>
+      <div id="dBody" style="color:var(--muted)"></div>
+      <label>Review status
+        <select id="status">
+          <option>None</option><option>Accepted</option><option>Rejected</option><option>Canceled</option><option>Completed</option>
+        </select>
+      </label>
+    </div>
+  </aside>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const S = {doc:null, info:null, page:0, zoom:100, markups:[], sel:null, tool:"select"};
+const scale = () => S.zoom / 72;
+
+function say(t){ $("msg").textContent = t || ""; }
+async function api(path, opts){
+  const r = await fetch(path, opts);
+  if(!r.ok){ let d=""; try{ d=(await r.json()).detail }catch(e){} throw new Error(d || r.statusText); }
+  return r;
+}
+
+async function upload(file){
+  say("Uploading…");
+  const fd = new FormData(); fd.append("file", file);
+  try{
+    S.doc = (await (await api("/documents",{method:"POST",body:fd})).json()).id;
+    S.info = await (await api(`/documents/${S.doc}/info`)).json();
+    S.page = 0; S.sel = null;
+    $("hint").style.display = "none"; $("sheet").style.display = "block";
+    $("dlbtn").disabled = false; $("download").href = `/documents/${S.doc}/file`;
+    say(""); await loadPage();
+  }catch(e){ say("Upload failed: " + e.message); }
+}
+
+async function loadPage(){
+  const n = S.info.pages.length;
+  $("pageLabel").textContent = `${S.page+1} / ${n}`;
+  $("prev").disabled = S.page === 0; $("next").disabled = S.page >= n-1;
+  const img = $("img");
+  await new Promise(res => {
+    img.onload = img.onerror = res;
+    img.src = `/documents/${S.doc}/pages/${S.page}.png?dpi=${S.zoom}&t=${Date.now()}`;
+  });
+  await refreshMarkups();
+}
+
+async function refreshMarkups(){
+  const all = await (await api(`/documents/${S.doc}/markups`)).json();
+  S.markups = all.filter(m => m.page === S.page);
+  if(S.sel && !S.markups.some(m => m.xref === S.sel)) S.sel = null;
+  render();
+}
+
+function render(){
+  const ov = $("overlay"); ov.replaceChildren();
+  const k = scale();
+  for(const m of S.markups){
+    const d = document.createElement("div");
+    d.className = `mk ${m.subject.replace(/\s/g,"")} ${m.status}${m.xref===S.sel?" sel":""}`;
+    const [x0,y0,x1,y1] = m.rect;
+    Object.assign(d.style,{left:x0*k+"px",top:y0*k+"px",width:(x1-x0)*k+"px",height:(y1-y0)*k+"px"});
+    d.title = m.content;
+    d.onclick = e => { if(S.tool==="select"){ e.stopPropagation(); select(m.xref); } };
+    ov.appendChild(d);
+  }
+  const list = $("list"); list.replaceChildren();
+  if(!S.markups.length){ const e=document.createElement("div"); e.className="empty"; e.textContent="No markups on this sheet."; list.appendChild(e); }
+  for(const m of S.markups){
+    const d = document.createElement("div"); d.className = "item"+(m.xref===S.sel?" sel":"");
+    const b = document.createElement("b"); b.textContent = m.subject || m.type;
+    const bd = document.createElement("span"); bd.className="badge"; bd.textContent = m.status; b.appendChild(bd);
+    const s = document.createElement("small"); s.textContent = [m.author, m.content].filter(Boolean).join(" — ");
+    d.append(b, s); d.onclick = () => select(m.xref); list.appendChild(d);
+  }
+  const m = S.markups.find(x => x.xref === S.sel);
+  $("detail").style.display = m ? "block" : "none";
+  if(m){ $("dTitle").textContent = m.subject || m.type; $("dBody").textContent = [m.author, m.content].filter(Boolean).join(" — "); $("status").value = m.status; }
+}
+
+function select(xref){ S.sel = xref; render(); }
+
+$("status").onchange = async e => {
+  const m = S.markups.find(x => x.xref === S.sel); if(!m) return;
+  try{
+    await api(`/documents/${S.doc}/markups/${m.page}/${m.xref}/status`,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({status:e.target.value, author:$("author").value})});
+    await refreshMarkups();
+  }catch(err){ say("Status failed: " + err.message); }
+};
+
+// Drawing: drag a rectangle with the cloud / text / stamp tool.
+let drag = null;
+const ov = $("overlay");
+const pos = e => { const r = ov.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+ov.addEventListener("pointerdown", e => {
+  if(S.tool === "select" || !S.doc) return;
+  drag = {start: pos(e)}; ov.setPointerCapture(e.pointerId);
+  const d = document.createElement("div"); d.id = "draft"; ov.appendChild(d); drag.el = d;
+});
+ov.addEventListener("pointermove", e => {
+  if(!drag) return;
+  const [x,y] = pos(e), [sx,sy] = drag.start;
+  Object.assign(drag.el.style,{left:Math.min(x,sx)+"px",top:Math.min(y,sy)+"px",width:Math.abs(x-sx)+"px",height:Math.abs(y-sy)+"px"});
+});
+ov.addEventListener("pointerup", async e => {
+  if(!drag) return;
+  const [x,y] = pos(e), [sx,sy] = drag.start; drag.el.remove(); drag = null;
+  if(Math.abs(x-sx) < 8 || Math.abs(y-sy) < 8) return;
+  const k = scale();
+  const rect = [Math.min(x,sx)/k, Math.min(y,sy)/k, Math.max(x,sx)/k, Math.max(y,sy)/k];
+  const text = $("note").value || (S.tool === "stamp" ? "Revised" : "");
+  try{
+    const r = await (await api(`/documents/${S.doc}/markups`,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({type:S.tool,page:S.page,rect,text,author:$("author").value})})).json();
+    await refreshMarkups(); select(r.xref); setTool("select");
+  }catch(err){ say("Add failed: " + err.message); }
+});
+
+function setTool(t){
+  S.tool = t;
+  document.querySelectorAll("[data-tool]").forEach(b => b.classList.toggle("on", b.dataset.tool === t));
+  ov.style.cursor = t === "select" ? "default" : "crosshair";
+}
+document.querySelectorAll("[data-tool]").forEach(b => b.onclick = () => setTool(b.dataset.tool));
+$("file").onchange = e => e.target.files[0] && upload(e.target.files[0]);
+$("prev").onclick = () => { S.page--; loadPage(); };
+$("next").onclick = () => { S.page++; loadPage(); };
+$("zoom").onchange = e => { S.zoom = +e.target.value; if(S.doc) loadPage(); };
+</script>
+</body>
+</html>

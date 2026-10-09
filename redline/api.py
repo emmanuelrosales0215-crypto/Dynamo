@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import markups
 
+STATIC = Path(__file__).parent / "static"
 WORKDIR = Path(os.environ.get("REDLINE_DATA", Path(tempfile.gettempdir()) / "redline"))
 app = FastAPI(title="Redline")
 
@@ -54,6 +55,16 @@ class StatusChange(BaseModel):
     author: str = ""
 
 
+@app.get("/", include_in_schema=False)
+def index() -> FileResponse:
+    return FileResponse(STATIC / "index.html")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    return Response(status_code=204)
+
+
 @app.post("/documents")
 async def upload(file: UploadFile = File(...)) -> dict:
     data = await file.read()
@@ -65,6 +76,15 @@ async def upload(file: UploadFile = File(...)) -> dict:
     doc_id = uuid.uuid4().hex
     (WORKDIR / f"{doc_id}.pdf").write_bytes(data)
     return {"id": doc_id}
+
+
+@app.get("/documents/{doc_id}/info")
+def info(doc_id: str) -> dict:
+    doc, _ = _open(doc_id)
+    try:
+        return {"pages": [{"width": p.rect.width, "height": p.rect.height} for p in doc]}
+    finally:
+        doc.close()
 
 
 @app.get("/documents/{doc_id}/markups")

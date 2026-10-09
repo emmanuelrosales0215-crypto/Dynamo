@@ -92,3 +92,13 @@ def test_studio_client():
     assert "client_id=id" in s.authorize_url("st")
     s.exchange_code("code")
     assert s.list_sessions() == {"Sessions": []}
+
+
+def test_viewer_and_info(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "WORKDIR", tmp_path)
+    c = TestClient(api.app)
+    r = c.get("/")
+    assert r.status_code == 200 and "<title>Redline</title>" in r.text
+    doc_id = c.post("/documents", files={"file": ("a.pdf", make_pdf(2), "application/pdf")}).json()["id"]
+    pages = c.get(f"/documents/{doc_id}/info").json()["pages"]
+    assert len(pages) == 2 and pages[0] == {"width": 792, "height": 612}

@@ -14,13 +14,15 @@ uvicorn redline.api:app --reload
 pytest
 ```
 
-Set `REDLINE_DATA` to choose where uploaded PDFs are stored.
+Open http://127.0.0.1:8000/ for the viewer. Set `REDLINE_DATA` to choose where uploaded PDFs are stored.
 
 ## API
 
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/documents` | Upload a PDF, returns `{id}` |
+| GET | `/` | Browser viewer |
+| GET | `/documents/{id}/info` | Page sizes in PDF points |
 | GET | `/documents/{id}/markups` | List markups with review status |
 | POST | `/documents/{id}/markups` | Add a `cloud`, `text` or `stamp` |
 | POST | `/documents/{id}/markups/{page}/{xref}/status` | Set Accepted/Rejected/Canceled/Completed/None |
@@ -37,7 +39,9 @@ Set `REDLINE_DATA` to choose where uploaded PDFs are stored.
   Developer Portal access and a Bluebeam subscription, and every URL must be checked
   against Bluebeam's docs. It is not wired into the API.
 - No authentication or per-user access control on the API. Add before exposing it.
-- No viewer UI yet.
+- Viewer (`static/index.html`, no build step): upload, page navigation, zoom, draw cloud/text/stamp
+  by dragging, markup list per sheet, set review status. Verified in headless Chromium.
+  No pan/zoom-to-fit, edit/delete of markups, or multi-user live updates yet.
 
 ## Provenance
 

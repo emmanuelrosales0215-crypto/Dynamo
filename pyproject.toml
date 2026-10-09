@@ -15,5 +15,8 @@ dev = ["pytest", "uvicorn"]
 [tool.setuptools]
 packages = ["redline"]
 
+[tool.setuptools.package-data]
+redline = ["static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["redline/tests"]
