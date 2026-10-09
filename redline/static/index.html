@@ -64,6 +64,8 @@ aside h2{font-size:13px;margin:0;padding:10px 12px;border-bottom:1px solid var(-
   <input id="note" placeholder="Note / stamp text" size="18">
   <input id="author" placeholder="Author" size="10">
   <div class="sep"></div>
+  <button id="undo" disabled title="Undo (Ctrl+Z)">Undo</button><button id="redo" disabled title="Redo (Ctrl+Shift+Z)">Redo</button>
+  <div class="sep"></div>
   <a id="download" href="#"><button disabled id="dlbtn">Download PDF</button></a>
   <span id="msg"></span>
 </header>
@@ -115,6 +117,9 @@ async function upload(file){
 }
 
 async function loadPage(){
+  S.info = await (await api(`/documents/${S.doc}/info`)).json();
+  $("undo").disabled = !S.info.can_undo; $("redo").disabled = !S.info.can_redo;
+  if(S.page >= S.info.pages.length) S.page = S.info.pages.length - 1;
   const n = S.info.pages.length;
   $("pageLabel").textContent = `${S.page+1} / ${n}`;
   $("prev").disabled = S.page === 0; $("next").disabled = S.page >= n-1;
@@ -168,7 +173,7 @@ $("status").onchange = async e => {
     await api(`/documents/${S.doc}/markups/${m.page}/${m.xref}/status`,{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({status:e.target.value, author:$("author").value})});
-    await refreshMarkups();
+    await loadPage();
   }catch(err){ say("Status failed: " + err.message); }
 };
 
@@ -176,8 +181,8 @@ async function patch(m, body){
   try{
     const r = await (await api(`/documents/${S.doc}/markups/${m.page}/${m.xref}`,{method:"PATCH",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)})).json();
-    S.sel = r.xref; await refreshMarkups();
-  }catch(err){ say("Edit failed: " + err.message); await refreshMarkups(); }
+    S.sel = r.xref; await loadPage();
+  }catch(err){ say("Edit failed: " + err.message); await loadPage(); }
 }
 
 // Move or resize a markup by dragging it (select tool).
@@ -208,7 +213,7 @@ $("dText").onkeydown = e => { if(e.key === "Enter") $("saveText").click(); };
 async function del(){
   const m = S.markups.find(x => x.xref === S.sel);
   if(!m || !confirm("Delete this markup and its review status?")) return;
-  try{ await api(`/documents/${S.doc}/markups/${m.page}/${m.xref}`,{method:"DELETE"}); S.sel = null; await refreshMarkups(); }
+  try{ await api(`/documents/${S.doc}/markups/${m.page}/${m.xref}`,{method:"DELETE"}); S.sel = null; await loadPage(); }
   catch(err){ say("Delete failed: " + err.message); }
 }
 $("del").onclick = del;
@@ -241,7 +246,7 @@ ov.addEventListener("pointerup", async e => {
     const r = await (await api(`/documents/${S.doc}/markups`,{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({type:S.tool,page:S.page,rect,text,author:$("author").value})})).json();
-    await refreshMarkups(); select(r.xref); setTool("select");
+    S.sel = r.xref; await loadPage(); setTool("select");
   }catch(err){ say("Add failed: " + err.message); }
 });
 
@@ -252,6 +257,19 @@ function setTool(t){
 }
 document.querySelectorAll("[data-tool]").forEach(b => b.onclick = () => setTool(b.dataset.tool));
 $("file").onchange = e => e.target.files[0] && upload(e.target.files[0]);
+async function history(kind){
+  if(!S.doc || $(kind).disabled) return;
+  try{ await api(`/documents/${S.doc}/${kind}`,{method:"POST"}); await loadPage(); }
+  catch(err){ say(kind + " failed: " + err.message); }
+}
+$("undo").onclick = () => history("undo");
+$("redo").onclick = () => history("redo");
+document.addEventListener("keydown", e => {
+  if(!(e.ctrlKey || e.metaKey) || e.altKey || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  const k = e.key.toLowerCase();
+  if(k === "z"){ e.preventDefault(); history(e.shiftKey ? "redo" : "undo"); }
+  else if(k === "y"){ e.preventDefault(); history("redo"); }
+});
 $("prev").onclick = () => { S.page--; loadPage(); };
 $("next").onclick = () => { S.page++; loadPage(); };
 $("zoom").onchange = e => { S.zoom = +e.target.value; if(S.doc) loadPage(); };

@@ -137,3 +137,41 @@ def test_api_edit_delete(tmp_path, monkeypatch):
     assert c.delete(f"/documents/{doc_id}/markups/0/{ms[0]['xref']}").status_code == 200
     assert c.get(f"/documents/{doc_id}/markups").json() == []
     assert c.delete(f"/documents/{doc_id}/markups/0/{xref}").status_code == 404
+
+
+def test_undo_redo(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "WORKDIR", tmp_path)
+    c = TestClient(api.app)
+    doc_id = c.post("/documents", files={"file": ("a.pdf", make_pdf(), "application/pdf")}).json()["id"]
+    assert c.post(f"/documents/{doc_id}/undo").status_code == 409
+    xref = c.post(f"/documents/{doc_id}/markups", json={
+        "type": "text", "page": 0, "rect": [10, 10, 200, 40], "text": "one"}).json()["xref"]
+    c.patch(f"/documents/{doc_id}/markups/0/{xref}", json={"text": "two"})
+    c.delete(f"/documents/{doc_id}/markups/0/{xref}")
+    count = lambda: len(c.get(f"/documents/{doc_id}/markups").json())
+    text = lambda: c.get(f"/documents/{doc_id}/markups").json()[0]["content"]
+    assert count() == 0 and c.get(f"/documents/{doc_id}/info").json()["can_undo"]
+    assert c.post(f"/documents/{doc_id}/undo").json() == {"can_undo": True, "can_redo": True}
+    assert text() == "two"
+    c.post(f"/documents/{doc_id}/undo")
+    assert text() == "one"
+    c.post(f"/documents/{doc_id}/redo")
+    assert text() == "two"
+    # a new edit clears redo
+    c.patch(f"/documents/{doc_id}/markups/0/{xref}", json={"text": "three"})
+    assert not c.get(f"/documents/{doc_id}/info").json()["can_redo"]
+    assert c.post(f"/documents/{doc_id}/redo").status_code == 409
+    for _ in range(3):
+        c.post(f"/documents/{doc_id}/undo")
+    assert count() == 0
+    assert c.post(f"/documents/{doc_id}/undo").status_code == 409
+
+
+def test_undo_history_is_capped(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "WORKDIR", tmp_path)
+    monkeypatch.setattr(api, "MAX_UNDO", 3)
+    c = TestClient(api.app)
+    doc_id = c.post("/documents", files={"file": ("a.pdf", make_pdf(), "application/pdf")}).json()["id"]
+    for i in range(6):
+        c.post(f"/documents/{doc_id}/markups", json={"type": "text", "page": 0, "rect": [10, 10, 99, 40], "text": str(i)})
+    assert len(list((tmp_path / f"{doc_id}.undo").glob("*.pdf"))) == 3

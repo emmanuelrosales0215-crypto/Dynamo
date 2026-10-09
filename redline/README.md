@@ -22,7 +22,8 @@ Open http://127.0.0.1:8000/ for the viewer. Set `REDLINE_DATA` to choose where u
 |---|---|---|
 | POST | `/documents` | Upload a PDF, returns `{id}` |
 | GET | `/` | Browser viewer |
-| GET | `/documents/{id}/info` | Page sizes in PDF points |
+| GET | `/documents/{id}/info` | Page sizes in PDF points, plus `can_undo` / `can_redo` |
+| POST | `/documents/{id}/undo`, `/redo` | Step back or forward through edits (409 if nothing to do) |
 | GET | `/documents/{id}/markups` | List markups with review status |
 | POST | `/documents/{id}/markups` | Add a `cloud`, `text` or `stamp` |
 | PATCH | `/documents/{id}/markups/{page}/{xref}` | Change text, rect or colour (returns the xref, which changes for a resized cloud) |
@@ -44,7 +45,9 @@ Open http://127.0.0.1:8000/ for the viewer. Set `REDLINE_DATA` to choose where u
 - Viewer (`static/index.html`, no build step): upload, page navigation, zoom, draw cloud/text/stamp
   by dragging, markup list per sheet, set review status. Verified in headless Chromium.
   Drag to move, drag the corner handle to resize, edit text, delete (button or Delete key).
-  No undo, pan/fit-to-width, or multi-user live updates yet.
+  Undo/redo (buttons, Ctrl+Z, Ctrl+Shift+Z): each edit snapshots the PDF, last 50 kept,
+  a new edit clears redo. History is per document and shared by everyone using it.
+  No pan/fit-to-width or multi-user live updates yet.
 
 ## Provenance
 

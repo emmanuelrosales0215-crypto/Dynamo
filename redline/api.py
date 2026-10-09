@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import tempfile
 import uuid
 from pathlib import Path
@@ -34,11 +35,48 @@ def _open(doc_id: str) -> tuple[pymupdf.Document, Path]:
     return pymupdf.open(p), p
 
 
+MAX_UNDO = 50
+
+
+def _hist(p: Path, kind: str) -> Path:
+    d = p.parent / f"{p.stem}.{kind}"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def _steps(d: Path) -> list[Path]:
+    return sorted(d.glob("*.pdf"))
+
+
+def _push(d: Path, src: Path, move: bool = False) -> None:
+    """Add src to a history stack; names sort by a monotonic counter."""
+    n = int(_steps(d)[-1].stem) + 1 if _steps(d) else 0
+    (shutil.move if move else shutil.copy2)(src, d / f"{n:06d}.pdf")
+
+
 def _save(doc: pymupdf.Document, p: Path) -> None:
+    """Write the edited PDF, first snapshotting the current one for undo."""
     tmp = p.with_suffix(".tmp")
     doc.save(tmp, deflate=True)
     doc.close()
+    undo, redo = _hist(p, "undo"), _hist(p, "redo")
+    _push(undo, p)
+    for old in _steps(undo)[:-MAX_UNDO]:
+        old.unlink()
+    for old in _steps(redo):
+        old.unlink()
     os.replace(tmp, p)
+
+
+def _step(doc_id: str, src_kind: str, dst_kind: str) -> dict:
+    p = _path(doc_id)
+    src, dst = _hist(p, src_kind), _hist(p, dst_kind)
+    steps = _steps(src)
+    if not steps:
+        raise HTTPException(409, f"nothing to {'undo' if src_kind == 'undo' else 'redo'}")
+    _push(dst, p)
+    shutil.move(steps[-1], p)
+    return {"can_undo": bool(_steps(_hist(p, "undo"))), "can_redo": bool(_steps(_hist(p, "redo")))}
 
 
 class NewMarkup(BaseModel):
@@ -84,11 +122,23 @@ async def upload(file: UploadFile = File(...)) -> dict:
     return {"id": doc_id}
 
 
+@app.post("/documents/{doc_id}/undo")
+def undo(doc_id: str) -> dict:
+    return _step(doc_id, "undo", "redo")
+
+
+@app.post("/documents/{doc_id}/redo")
+def redo(doc_id: str) -> dict:
+    return _step(doc_id, "redo", "undo")
+
+
 @app.get("/documents/{doc_id}/info")
 def info(doc_id: str) -> dict:
-    doc, _ = _open(doc_id)
+    doc, path = _open(doc_id)
     try:
-        return {"pages": [{"width": p.rect.width, "height": p.rect.height} for p in doc]}
+        return {"pages": [{"width": p.rect.width, "height": p.rect.height} for p in doc],
+                "can_undo": bool(_steps(_hist(path, "undo"))),
+                "can_redo": bool(_steps(_hist(path, "redo")))}
     finally:
         doc.close()
 
