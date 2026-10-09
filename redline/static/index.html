@@ -24,6 +24,12 @@ main{flex:1;display:flex;min-height:0}
 .mk{position:absolute;border:2px solid var(--red);cursor:pointer}
 .mk.Cloud{border-style:dashed;border-radius:14px}
 .mk.sel{outline:3px solid var(--accent)}
+.mk.sel{cursor:move}
+.h{position:absolute;right:-7px;bottom:-7px;width:12px;height:12px;background:var(--accent);border:2px solid #fff;border-radius:3px;cursor:nwse-resize}
+#detail input{width:100%;margin-top:6px}
+.row{display:flex;gap:8px;margin-top:8px}
+.row button{flex:1}
+button.danger{color:var(--red)}
 .mk.Completed,.mk.Accepted{opacity:.45}
 .mk.Rejected,.mk.Canceled{opacity:.45;border-color:#888}
 #draft{position:absolute;border:2px dotted var(--accent);background:rgba(31,95,214,.12);pointer-events:none}
@@ -72,7 +78,9 @@ aside h2{font-size:13px;margin:0;padding:10px 12px;border-bottom:1px solid var(-
     <div id="detail">
       <b id="dTitle"></b>
       <div id="dBody" style="color:var(--muted)"></div>
-      <label>Review status
+      <label>Text <input id="dText" maxlength="500"></label>
+      <div class="row"><button id="saveText">Save text</button><button id="del" class="danger">Delete</button></div>
+      <label style="display:block;margin-top:8px">Review status
         <select id="status">
           <option>None</option><option>Accepted</option><option>Rejected</option><option>Canceled</option><option>Completed</option>
         </select>
@@ -134,7 +142,8 @@ function render(){
     const [x0,y0,x1,y1] = m.rect;
     Object.assign(d.style,{left:x0*k+"px",top:y0*k+"px",width:(x1-x0)*k+"px",height:(y1-y0)*k+"px"});
     d.title = m.content;
-    d.onclick = e => { if(S.tool==="select"){ e.stopPropagation(); select(m.xref); } };
+    d.onpointerdown = e => startEdit(e, m, d, "move");
+    if(m.xref === S.sel){ const h = document.createElement("div"); h.className = "h"; h.onpointerdown = e => startEdit(e, m, d, "resize"); d.appendChild(h); }
     ov.appendChild(d);
   }
   const list = $("list"); list.replaceChildren();
@@ -148,7 +157,7 @@ function render(){
   }
   const m = S.markups.find(x => x.xref === S.sel);
   $("detail").style.display = m ? "block" : "none";
-  if(m){ $("dTitle").textContent = m.subject || m.type; $("dBody").textContent = [m.author, m.content].filter(Boolean).join(" — "); $("status").value = m.status; }
+  if(m){ $("dTitle").textContent = m.subject || m.type; $("dBody").textContent = m.author; $("dText").value = m.content; $("status").value = m.status; }
 }
 
 function select(xref){ S.sel = xref; render(); }
@@ -162,6 +171,50 @@ $("status").onchange = async e => {
     await refreshMarkups();
   }catch(err){ say("Status failed: " + err.message); }
 };
+
+async function patch(m, body){
+  try{
+    const r = await (await api(`/documents/${S.doc}/markups/${m.page}/${m.xref}`,{method:"PATCH",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)})).json();
+    S.sel = r.xref; await refreshMarkups();
+  }catch(err){ say("Edit failed: " + err.message); await refreshMarkups(); }
+}
+
+// Move or resize a markup by dragging it (select tool).
+function startEdit(e, m, el, mode){
+  if(S.tool !== "select") return;
+  e.stopPropagation(); e.preventDefault();
+  if(S.sel !== m.xref){ S.sel = m.xref; render(); }
+  dragMarkup(e, m, mode);
+}
+function dragMarkup(e, m, mode){
+  const el = [...$("overlay").querySelectorAll(".mk")][S.markups.findIndex(x => x.xref === m.xref)];
+  if(!el) return;
+  const k = scale(), [px,py] = pos(e), [x0,y0,x1,y1] = m.rect;
+  let moved = false, rect = m.rect.slice();
+  el.setPointerCapture(e.pointerId);
+  el.onpointermove = ev => {
+    const dx = (pos(ev)[0]-px)/k, dy = (pos(ev)[1]-py)/k;
+    if(Math.abs(dx*k) + Math.abs(dy*k) > 3) moved = true;
+    rect = mode === "move" ? [x0+dx,y0+dy,x1+dx,y1+dy]
+                           : [x0,y0,Math.max(x1+dx,x0+5),Math.max(y1+dy,y0+5)];
+    Object.assign(el.style,{left:rect[0]*k+"px",top:rect[1]*k+"px",width:(rect[2]-rect[0])*k+"px",height:(rect[3]-rect[1])*k+"px"});
+  };
+  el.onpointerup = () => { el.onpointermove = el.onpointerup = null; if(moved) patch(m, {rect}); };
+}
+
+$("saveText").onclick = () => { const m = S.markups.find(x => x.xref === S.sel); if(m) patch(m, {text:$("dText").value}); };
+$("dText").onkeydown = e => { if(e.key === "Enter") $("saveText").click(); };
+async function del(){
+  const m = S.markups.find(x => x.xref === S.sel);
+  if(!m || !confirm("Delete this markup and its review status?")) return;
+  try{ await api(`/documents/${S.doc}/markups/${m.page}/${m.xref}`,{method:"DELETE"}); S.sel = null; await refreshMarkups(); }
+  catch(err){ say("Delete failed: " + err.message); }
+}
+$("del").onclick = del;
+document.addEventListener("keydown", e => {
+  if(e.key === "Delete" && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) del();
+});
 
 // Drawing: drag a rectangle with the cloud / text / stamp tool.
 let drag = null;

@@ -39,6 +39,15 @@ def _irt_xref(doc: pymupdf.Document, xref: int) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _rect(annot: pymupdf.Annot) -> pymupdf.Rect:
+    """Markup bounds; a polygon's vertices avoid the border padding in annot.rect."""
+    pts = annot.vertices if annot.type[1] == "Polygon" else None
+    if pts:
+        return pymupdf.Rect(min(x for x, _ in pts), min(y for _, y in pts),
+                            max(x for x, _ in pts), max(y for _, y in pts))
+    return annot.rect
+
+
 def _stamp_info(annot: pymupdf.Annot, author: str, subject: str, content: str) -> None:
     annot.set_info(title=author, subject=subject, content=content)
 
@@ -85,9 +94,7 @@ def set_status(doc: pymupdf.Document, page_no: int, xref: int, status: str,
     if status not in STATUSES:
         raise ValueError(f"status must be one of {STATUSES}")
     page = doc[page_no]
-    target = page.load_annot(xref)
-    if target is None:
-        raise KeyError(f"no annotation {xref} on page {page_no}")
+    target = _find(page, xref)
     r = target.rect
     reply = page.add_text_annot(pymupdf.Rect(r.x0, r.y0, r.x0 + 1, r.y0 + 1), " ")
     reply.set_irt_xref(target.xref)
@@ -118,8 +125,69 @@ def list_markups(doc: pymupdf.Document) -> list[Markup]:
             out.append(Markup(
                 page=page.number, xref=annot.xref, type=annot.type[1],
                 author=info.get("title", ""), subject=info.get("subject", ""),
-                content=info.get("content", ""), rect=tuple(annot.rect),
+                content=info.get("content", ""), rect=tuple(_rect(annot)),
                 color=annot.colors.get("stroke"), status="None"))
     for m in out:
         m.status = statuses.get(m.xref, "None")
     return out
+
+
+def _find(page: pymupdf.Page, xref: int) -> pymupdf.Annot:
+    for annot in page.annots() or []:
+        if annot.xref == xref:
+            return annot
+    raise KeyError(f"no annotation {xref} on page {page.number}")
+
+
+def _load(doc: pymupdf.Document, page_no: int, xref: int) -> tuple[pymupdf.Page, pymupdf.Annot]:
+    page = doc[page_no]
+    annot = _find(page, xref)
+    if _irt_xref(doc, xref) is not None:
+        raise KeyError(f"no markup {xref} on page {page_no}")
+    return page, annot
+
+
+def update_markup(doc: pymupdf.Document, page_no: int, xref: int, *, rect=None,
+                  text: str | None = None, color=None) -> int:
+    """Change a markup's text, position/size or colour; omitted fields stay as they are.
+
+    Returns the markup's xref. A cloud is rebuilt when its shape changes, because
+    PyMuPDF cannot edit polygon vertices in place, so its xref changes and its
+    review status is carried over to the new annotation.
+    """
+    page, annot = _load(doc, page_no, xref)
+    kind = annot.type[1]
+    info = annot.info
+    if text is not None:
+        info["content"] = text
+    if kind == "Polygon" and (rect is not None or color is not None):
+        current = next(m for m in list_markups(doc) if m.xref == xref)
+        new_rect = rect if rect is not None else _rect(annot)
+        new_color = tuple(color) if color is not None else (annot.colors.get("stroke") or RED)
+        delete_markup(doc, page_no, xref)
+        new = add_cloud(page, new_rect, info["content"], info["title"], new_color)
+        if current.status != "None":
+            set_status(doc, page_no, new.xref, current.status)
+        return new.xref
+    if kind == "FreeText":
+        if rect is not None:
+            annot.set_rect(pymupdf.Rect(rect))
+        annot.set_info(info)
+        annot.update(**({"text_color": tuple(color)} if color is not None else {}))
+        return xref
+    annot.set_info(info)
+    if color is not None:
+        annot.set_colors(stroke=tuple(color))
+    if rect is not None:
+        annot.set_rect(pymupdf.Rect(rect))
+    annot.update()
+    return xref
+
+
+def delete_markup(doc: pymupdf.Document, page_no: int, xref: int) -> None:
+    """Delete a markup together with its review-status replies."""
+    page, annot = _load(doc, page_no, xref)
+    replies = [a for a in page.annots() if _irt_xref(doc, a.xref) == xref]
+    for reply in replies:
+        page.delete_annot(reply)
+    page.delete_annot(_find(page, xref))

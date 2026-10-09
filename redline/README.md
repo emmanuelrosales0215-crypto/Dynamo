@@ -25,6 +25,8 @@ Open http://127.0.0.1:8000/ for the viewer. Set `REDLINE_DATA` to choose where u
 | GET | `/documents/{id}/info` | Page sizes in PDF points |
 | GET | `/documents/{id}/markups` | List markups with review status |
 | POST | `/documents/{id}/markups` | Add a `cloud`, `text` or `stamp` |
+| PATCH | `/documents/{id}/markups/{page}/{xref}` | Change text, rect or colour (returns the xref, which changes for a resized cloud) |
+| DELETE | `/documents/{id}/markups/{page}/{xref}` | Delete a markup and its review-status replies |
 | POST | `/documents/{id}/markups/{page}/{xref}/status` | Set Accepted/Rejected/Canceled/Completed/None |
 | GET | `/documents/{id}/pages/{n}.png` | Render a page |
 | GET | `/documents/{id}/file` | Download the marked-up PDF |
@@ -41,7 +43,8 @@ Open http://127.0.0.1:8000/ for the viewer. Set `REDLINE_DATA` to choose where u
 - No authentication or per-user access control on the API. Add before exposing it.
 - Viewer (`static/index.html`, no build step): upload, page navigation, zoom, draw cloud/text/stamp
   by dragging, markup list per sheet, set review status. Verified in headless Chromium.
-  No pan/zoom-to-fit, edit/delete of markups, or multi-user live updates yet.
+  Drag to move, drag the corner handle to resize, edit text, delete (button or Delete key).
+  No undo, pan/fit-to-width, or multi-user live updates yet.
 
 ## Provenance
 

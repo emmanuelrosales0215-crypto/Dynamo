@@ -102,3 +102,38 @@ def test_viewer_and_info(tmp_path, monkeypatch):
     doc_id = c.post("/documents", files={"file": ("a.pdf", make_pdf(2), "application/pdf")}).json()["id"]
     pages = c.get(f"/documents/{doc_id}/info").json()["pages"]
     assert len(pages) == 2 and pages[0] == {"width": 792, "height": 612}
+
+
+def test_update_and_delete(doc):
+    cloud = markups.add_cloud(doc[0], (100, 100, 200, 160), "a", "Eng").xref
+    markups.set_status(doc, 0, cloud, "Completed")
+    text = markups.add_text(doc[0], (300, 100, 500, 140), "hello", "Eng").xref
+    cloud = markups.update_markup(doc, 0, cloud, rect=(150, 150, 300, 260), text="b", color=(0, 0, 1))
+    assert markups.update_markup(doc, 0, text, rect=(310, 110, 520, 160), text="bye") == text
+    got = {m.xref: m for m in markups.list_markups(doc)}
+    assert got[cloud].rect == (150, 150, 300, 260) and got[cloud].content == "b"
+    assert tuple(got[cloud].color) == (0.0, 0.0, 1.0) and got[cloud].status == "Completed"
+    assert got[text].content == "bye" and "bye" in doc[0].get_text()
+    markups.delete_markup(doc, 0, cloud)
+    left = markups.list_markups(doc)
+    assert [m.xref for m in left] == [text]
+    assert len(list(doc[0].annots())) == 1  # status reply removed too
+    with pytest.raises(KeyError):
+        markups.delete_markup(doc, 0, cloud)
+
+
+def test_api_edit_delete(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "WORKDIR", tmp_path)
+    c = TestClient(api.app)
+    doc_id = c.post("/documents", files={"file": ("a.pdf", make_pdf(), "application/pdf")}).json()["id"]
+    xref = c.post(f"/documents/{doc_id}/markups", json={
+        "type": "cloud", "page": 0, "rect": [100, 100, 200, 160], "text": "a"}).json()["xref"]
+    r = c.patch(f"/documents/{doc_id}/markups/0/{xref}", json={"rect": [10, 10, 90, 70], "text": "b"})
+    assert r.status_code == 200
+    ms = c.get(f"/documents/{doc_id}/markups").json()
+    assert ms[0]["content"] == "b" and ms[0]["rect"] == [10, 10, 90, 70]
+    assert c.patch(f"/documents/{doc_id}/markups/0/9999", json={"text": "x"}).status_code == 404
+    assert c.patch(f"/documents/{doc_id}/markups/7/{xref}", json={"text": "x"}).status_code == 400
+    assert c.delete(f"/documents/{doc_id}/markups/0/{ms[0]['xref']}").status_code == 200
+    assert c.get(f"/documents/{doc_id}/markups").json() == []
+    assert c.delete(f"/documents/{doc_id}/markups/0/{xref}").status_code == 404

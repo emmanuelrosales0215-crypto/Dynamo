@@ -50,6 +50,12 @@ class NewMarkup(BaseModel):
     color: tuple[float, float, float] = (1.0, 0.0, 0.0)
 
 
+class MarkupEdit(BaseModel):
+    rect: tuple[float, float, float, float] | None = None
+    text: str | None = None
+    color: tuple[float, float, float] | None = None
+
+
 class StatusChange(BaseModel):
     status: Literal["Accepted", "Rejected", "Canceled", "Completed", "None"]
     author: str = ""
@@ -109,6 +115,33 @@ def create_markup(doc_id: str, body: NewMarkup) -> dict:
     xref = annot.xref
     _save(doc, p)
     return {"page": body.page, "xref": xref}
+
+
+def _edit(doc_id: str, page: int, work) -> dict:
+    doc, p = _open(doc_id)
+    try:
+        if not 0 <= page < len(doc):
+            raise HTTPException(400, "page out of range")
+        result = work(doc)
+    except KeyError as e:
+        doc.close()
+        raise HTTPException(404, str(e))
+    except HTTPException:
+        doc.close()
+        raise
+    _save(doc, p)
+    return result
+
+
+@app.patch("/documents/{doc_id}/markups/{page}/{xref}")
+def edit_markup(doc_id: str, page: int, xref: int, body: MarkupEdit) -> dict:
+    return _edit(doc_id, page, lambda doc: {"page": page, "xref": markups.update_markup(
+        doc, page, xref, rect=body.rect, text=body.text, color=body.color)})
+
+
+@app.delete("/documents/{doc_id}/markups/{page}/{xref}")
+def remove_markup(doc_id: str, page: int, xref: int) -> dict:
+    return _edit(doc_id, page, lambda doc: markups.delete_markup(doc, page, xref) or {"deleted": xref})
 
 
 @app.post("/documents/{doc_id}/markups/{page}/{xref}/status")
