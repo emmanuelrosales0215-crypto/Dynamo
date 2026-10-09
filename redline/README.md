@@ -23,6 +23,9 @@ after that sign-up is closed unless you set `REDLINE_ALLOW_SIGNUP=1`.
 | `REDLINE_ALLOW_SIGNUP` | off | `1` lets anyone create an account |
 | `REDLINE_SECURE_COOKIES` | off | `1` marks the session cookie Secure. Turn on behind HTTPS. |
 | `REDLINE_MAX_UPLOAD_MB` | 100 | Largest PDF accepted |
+| `ANTHROPIC_API_KEY` | unset | Turns on the AI review assistant (one shared server key) |
+| `REDLINE_AI_DAILY_LIMIT` | 20 | AI reviews per user per day (UTC) |
+| `REDLINE_AI_MODEL` | `claude-opus-5-5` | Claude model used for reviews |
 
 ## Accounts, sharing and history
 
@@ -39,6 +42,24 @@ after that sign-up is closed unless you set `REDLINE_ALLOW_SIGNUP=1`.
   Markups are tracked by a stable id (the PDF `/NM` name), which survives edits and resizing.
 - **Activity log:** who did what on each drawing, visible to everyone with access.
 - **Live-ish updates:** the viewer re-checks for other people's changes every few seconds.
+
+## AI review assistant
+
+Click **AI review** to have Claude look at the current sheet and its markups. It returns a short
+summary and findings: unclear comments, unresolved items, possible conflicts, missing markups,
+wording or unit problems. Each finding can point at a markup and propose better text.
+
+- **Advice only.** Nothing changes until you click **Apply text** (which is an ordinary, undoable
+  edit made as you) or **Show / Dismiss**. The review never edits the drawing.
+- **Treats the sheet as data.** Markup text and sheet text go to the model as untrusted content; a
+  markup that says "ignore your instructions" is reported as a finding, not followed.
+- **Bounded cost.** One server key, so each user gets a daily limit. A failed review doesn't count
+  against it. Reviews are recorded in the activity log.
+- **What is sent:** a ~1600 px image of the sheet, the drawing's file name, and the id, author,
+  text, status and position of each markup on that sheet. Don't enable it for drawings that
+  can't leave your network.
+- Uses the server-side refusal fallback (`fallbacks: "default"`), so a declined request is
+  retried on a fallback model instead of failing.
 
 ## API
 
@@ -60,6 +81,8 @@ All routes except `/auth/*` and `/` need a signed-in session.
 | DELETE | `/documents/{id}/markups/{markup_id}` | Delete a markup and its review replies |
 | POST | `/documents/{id}/markups/{markup_id}/status` | Accepted/Rejected/Canceled/Completed/None |
 | POST | `/documents/{id}/undo`, `/redo` | Your own history (409 if nothing to do) |
+| GET | `/ai/status` | `{enabled, limit, remaining}` for the signed-in user |
+| POST | `/documents/{id}/review` | AI review of one sheet (`{page}`); 503 if no key, 429 at the daily limit |
 | GET | `/documents/{id}/pages/{n}.png` | Render a page |
 | GET | `/documents/{id}/file` | Download the marked-up PDF |
 
@@ -78,6 +101,10 @@ All routes except `/auth/*` and `/` need a signed-in session.
   polygon, so Revu may redraw the scallops on first edit.
 - `studio.py` (Bluebeam Studio sessions) is an **unverified** skeleton and is not wired in. It needs
   Developer Portal access and a Bluebeam subscription; check every URL against Bluebeam's docs.
+- **The AI review has not been run against the live Claude API** (no key was available while
+  building it). Request building, response cleaning, limits, failure handling and the UI are tested
+  with a fake client; the exact request shape (structured output + `fallbacks`) is written from
+  the SDK docs. Run one real review and check the server log before relying on it.
 - Viewer has no pan/fit-to-width.
 
 ## Provenance

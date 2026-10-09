@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, Up
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from . import auth, history, markups
+from . import auth, history, markups, review
 from .db import connect, data_dir
 
 STATIC = Path(__file__).parent / "static"
@@ -135,6 +135,10 @@ class MarkupEdit(BaseModel):
 
 class StatusChange(BaseModel):
     status: Literal["Accepted", "Rejected", "Canceled", "Completed", "None"]
+
+
+class ReviewRequest(BaseModel):
+    page: int = Field(ge=0)
 
 
 class ShareWith(BaseModel):
@@ -350,6 +354,46 @@ def undo(doc_id: str, user: User = Depends(auth.current_user)) -> dict:
 @app.post("/documents/{doc_id}/redo")
 def redo(doc_id: str, user: User = Depends(auth.current_user)) -> dict:
     return _step(doc_id, user, False)
+
+
+# ---- AI review assistant
+
+@app.get("/ai/status")
+def ai_status(user: User = Depends(auth.current_user)) -> dict:
+    limit = review.daily_limit()
+    return {"enabled": review.enabled(), "limit": limit, "remaining": max(limit - review.used_today(user["id"]), 0)}
+
+
+@app.post("/documents/{doc_id}/review")
+def ai_review(doc_id: str, body: ReviewRequest, user: User = Depends(auth.current_user)) -> dict:
+    d = _access(doc_id, user)
+    if not review.enabled():
+        raise HTTPException(503, "AI review isn't set up on this server (no ANTHROPIC_API_KEY).")
+    doc = pymupdf.open(_pdf(doc_id))
+    try:
+        _page_check(doc, body.page)
+        png = review.render_sheet(doc, body.page)
+        size = (doc[body.page].rect.width, doc[body.page].rect.height)
+        pages = len(doc)
+        on_sheet = [m.as_dict() for m in markups.list_markups(doc) if m.page == body.page]
+    finally:
+        doc.close()
+    if not review.claim(user["id"]):
+        raise HTTPException(429, f"Daily AI review limit reached ({review.daily_limit()}). Try again tomorrow.")
+    try:
+        result = review.review_sheet(png, d["name"], body.page, pages, size, on_sheet)
+    except review.ReviewError as e:
+        review.refund(user["id"])
+        raise HTTPException(502, str(e))
+    except Exception as e:  # SDK errors: don't leak details, don't charge the user's quota
+        review.refund(user["id"])
+        import logging
+        logging.getLogger("redline").warning("AI review failed: %s: %s", type(e).__name__, e)
+        status = 503 if type(e).__name__ in ("RateLimitError", "APIConnectionError", "APITimeoutError", "InternalServerError", "OverloadedError") else 502
+        raise HTTPException(status, "The AI service couldn't complete the review. Please try again shortly.")
+    _log(doc_id, user, f"ran an AI review of sheet {body.page + 1}")
+    limit = review.daily_limit()
+    return {**result, "page": body.page, "remaining": max(limit - review.used_today(user["id"]), 0)}
 
 
 # ---- rendering and download

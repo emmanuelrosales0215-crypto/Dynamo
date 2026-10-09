@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS history(
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   stack TEXT NOT NULL CHECK(stack IN ('undo','redo')), op TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS history_idx ON history(doc_id, user_id, stack, id);
+CREATE TABLE IF NOT EXISTS ai_usage(
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, day TEXT NOT NULL,
+  calls INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id, day));
 CREATE TABLE IF NOT EXISTS activity(
   id INTEGER PRIMARY KEY AUTOINCREMENT, doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id), at REAL NOT NULL DEFAULT (strftime('%s','now')),

@@ -47,6 +47,14 @@ summary{padding:8px 12px;cursor:pointer;color:var(--muted);text-transform:upperc
 #activity div{padding:4px 12px;font-size:12px;color:var(--muted)}
 #activity b{color:var(--text);font-weight:600}
 #msg{color:var(--red);padding:0 4px}
+#aiBox{max-height:240px;overflow:auto;padding:0 12px 10px}
+#aiBox .sum{color:var(--muted);margin:2px 0 8px}
+.find{border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px}
+.find .meta{font-size:12px;color:var(--muted)}
+.find p{margin:4px 0}
+.find .sug{background:rgba(31,95,214,.12);border-radius:6px;padding:4px 6px;margin:4px 0}
+.find .row{margin-top:6px}.find .row button{padding:2px 8px;font-size:12px}
+.sev-issue{color:var(--red);font-weight:600}
 .empty{margin:0 auto;padding:24px;color:var(--muted);text-align:center}
 dialog{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text);padding:20px;width:min(360px,92vw)}
 dialog::backdrop{background:rgba(0,0,0,.45)}
@@ -77,6 +85,7 @@ dialog .err{color:var(--red);min-height:1.4em;font-size:13px}
   <button id="undo" disabled title="Undo your last action (Ctrl+Z)">Undo</button>
   <button id="redo" disabled title="Redo (Ctrl+Shift+Z)">Redo</button>
   <div class="sep"></div>
+  <button id="aiBtn" disabled title="Ask AI to review this sheet">AI review</button>
   <button id="share" disabled>Share</button>
   <a id="download" href="#"><button disabled id="dlbtn">Download PDF</button></a>
   <span class="grow"></span>
@@ -103,6 +112,7 @@ dialog .err{color:var(--red);min-height:1.4em;font-size:13px}
         </select>
       </label>
     </div>
+    <details id="aiDetails" hidden open><summary>AI review</summary><div id="aiBox"></div></details>
     <details id="actDetails"><summary>Activity</summary><div id="activity"></div></details>
   </aside>
 </main>
@@ -169,7 +179,7 @@ $("loginForm").onsubmit = async e => {
   try{
     const r = await getJSON(S.signup ? "/auth/signup" : "/auth/login", send("POST", {username:$("lUser").value, password:$("lPass").value}));
     $("lPass").value = ""; $("loginDlg").close();
-    S.user = r.user; refreshChrome(); await loadDocs();
+    S.user = r.user; refreshChrome(); await loadAiStatus(); await loadDocs();
   }catch(err){ $("lErr").textContent = err.message; }
 };
 $("logout").onclick = async () => { try{ await api("/auth/logout", {method:"POST"}); }catch(e){} S.signupOpen = (await getJSON("/auth/status")).signup_open; showLogin(); };
@@ -199,6 +209,7 @@ function resetDoc(){
   for(const id of ["dlbtn","undo","redo","share","prev","next"]) $(id).disabled = true;
   $("pageLabel").textContent = "–"; $("docTitle").textContent = "Markups on this sheet";
   $("list").replaceChildren(); $("detail").style.display = "none"; $("activity").replaceChildren();
+  S.review = null; $("aiDetails").hidden = true; $("aiBtn").disabled = true;
 }
 $("docs").onchange = e => e.target.value ? openDoc(e.target.value) : resetDoc();
 $("uploadBtn").onclick = () => $("file").click();
@@ -212,7 +223,7 @@ $("file").onchange = async e => {
 
 async function openDoc(id){
   try{
-    S.doc = id; S.page = 0; S.sel = null; safeSet("redline.doc", id);
+    S.doc = id; S.page = 0; S.sel = null; S.review = null; safeSet("redline.doc", id);
     $("hint").style.display = "none"; $("sheet").style.display = "block";
     $("dlbtn").disabled = false; $("download").href = `${base()}/file`;
     await loadPage();
@@ -233,6 +244,8 @@ async function loadPage(){
   await new Promise(res => { img.onload = img.onerror = res; img.src = `${base()}/pages/${S.page}.png?dpi=${S.zoom}&t=${Date.now()}`; });
   await refreshMarkups();
   loadActivity();
+  $("aiBtn").disabled = !(S.ai && S.ai.enabled);
+  renderReview();
 }
 async function refreshMarkups(){
   const all = await getJSON(`${base()}/markups`);
@@ -375,6 +388,54 @@ $("prev").onclick = () => { S.page--; loadPage(); };
 $("next").onclick = () => { S.page++; loadPage(); };
 $("zoom").onchange = e => { S.zoom = +e.target.value; if(S.doc) loadPage(); };
 
+// ---------- AI review (suggestions only; nothing changes until you click)
+const SEV = {issue:"Issue", suggestion:"Suggestion", note:"Note"};
+const CAT = {unclear_comment:"unclear comment", unresolved_item:"unresolved item", possible_conflict:"possible conflict",
+             missing_markup:"missing markup", wording_or_units:"wording or units", other:"other"};
+async function loadAiStatus(){
+  try{ S.ai = await getJSON("/ai/status"); }catch(e){ S.ai = {enabled:false}; }
+  $("aiBtn").title = S.ai.enabled ? `Ask AI to review this sheet (${S.ai.remaining} left today)` : "AI review isn't set up on this server";
+  $("aiBtn").disabled = !S.ai.enabled || !S.doc;
+}
+$("aiBtn").onclick = async () => {
+  if(!S.doc) return;
+  $("aiBtn").disabled = true; say(""); const page = S.page;
+  $("aiDetails").hidden = false; $("aiDetails").open = true;
+  $("aiBox").replaceChildren(Object.assign(document.createElement("div"), {className:"sum", textContent:"Reviewing this sheet… this can take a minute."}));
+  try{
+    S.review = await getJSON(`${base()}/review`, send("POST", {page}));
+    S.ai.remaining = S.review.remaining; loadActivity();
+  }catch(err){ S.review = null; say("AI review failed: " + err.message); }
+  await loadAiStatus(); renderReview();
+};
+function renderReview(){
+  const box = $("aiBox"), r = S.review;
+  if(!r || r.page !== S.page){ box.replaceChildren(); $("aiDetails").hidden = true; return; }
+  $("aiDetails").hidden = false; box.replaceChildren();
+  const sum = document.createElement("div"); sum.className = "sum";
+  sum.textContent = r.summary || (r.findings.length ? "" : "No problems found."); box.appendChild(sum);
+  for(const f of r.findings){
+    const m = S.markups.find(x => x.id === f.markup_id);
+    const card = document.createElement("div"); card.className = "find";
+    const meta = document.createElement("div"); meta.className = "meta";
+    const sev = document.createElement("span"); sev.className = "sev-" + f.severity; sev.textContent = SEV[f.severity];
+    meta.append(sev, ` · ${CAT[f.category] || f.category}` + (m ? ` · ${m.subject}` : f.markup_id ? " · (markup no longer here)" : " · whole sheet"));
+    const msg = document.createElement("p"); msg.textContent = f.message;
+    card.append(meta, msg);
+    if(f.suggested_text && m){
+      const sug = document.createElement("div"); sug.className = "sug"; sug.textContent = "Suggested text: " + f.suggested_text; card.appendChild(sug);
+    }
+    const row = document.createElement("div"); row.className = "row";
+    const btn = (label, fn) => { const b = document.createElement("button"); b.textContent = label; b.onclick = fn; row.appendChild(b); };
+    if(m) btn("Show", () => select(m.id));
+    if(m && f.suggested_text) btn("Apply text", async () => {
+      await patch(m, {text: f.suggested_text}); r.findings = r.findings.filter(x => x !== f); renderReview();
+    });
+    btn("Dismiss", () => { r.findings = r.findings.filter(x => x !== f); renderReview(); });
+    card.appendChild(row); box.appendChild(card);
+  }
+}
+
 // ---------- sharing
 async function drawMembers(){
   const box = $("members"); box.replaceChildren();
@@ -419,7 +480,7 @@ setInterval(async () => {
   try{
     const st = await getJSON("/auth/status");
     S.signupOpen = st.signup_open; S.user = st.user; refreshChrome();
-    if(S.user) await loadDocs(); else showLogin();
+    if(S.user){ await loadAiStatus(); await loadDocs(); } else showLogin();
   }catch(e){ say("Can't reach the server"); }
 })();
 </script>
