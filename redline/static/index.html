@@ -14,8 +14,10 @@ header h1{font-size:16px;margin:0 8px 0 0}
 button,input,select{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 10px}
 button{cursor:pointer}button:hover{border-color:var(--accent)}
 button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 button:disabled{opacity:.5;cursor:default}
 .sep{width:1px;height:22px;background:var(--line)}
+.grow{flex:1}
 main{flex:1;display:flex;min-height:0}
 #stage{flex:1;overflow:auto;padding:16px;display:flex;align-items:flex-start}
 #sheet{position:relative;margin:0 auto;flex:none;box-shadow:0 2px 12px rgba(0,0,0,.25);background:#fff;display:none}
@@ -23,34 +25,43 @@ main{flex:1;display:flex;min-height:0}
 #overlay{position:absolute;inset:0}
 .mk{position:absolute;border:2px solid var(--red);cursor:pointer}
 .mk.Cloud{border-style:dashed;border-radius:14px}
-.mk.sel{outline:3px solid var(--accent)}
-.mk.sel{cursor:move}
-.h{position:absolute;right:-7px;bottom:-7px;width:12px;height:12px;background:var(--accent);border:2px solid #fff;border-radius:3px;cursor:nwse-resize}
-#detail input{width:100%;margin-top:6px}
-.row{display:flex;gap:8px;margin-top:8px}
-.row button{flex:1}
-button.danger{color:var(--red)}
+.mk.sel{outline:3px solid var(--accent);cursor:move}
 .mk.Completed,.mk.Accepted{opacity:.45}
 .mk.Rejected,.mk.Canceled{opacity:.45;border-color:#888}
+.h{position:absolute;right:-7px;bottom:-7px;width:12px;height:12px;background:var(--accent);border:2px solid #fff;border-radius:3px;cursor:nwse-resize}
 #draft{position:absolute;border:2px dotted var(--accent);background:rgba(31,95,214,.12);pointer-events:none}
 aside{width:320px;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
 aside h2{font-size:13px;margin:0;padding:10px 12px;border-bottom:1px solid var(--line);color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-#list{flex:1;overflow:auto}
+#list{flex:1;overflow:auto;min-height:60px}
 .item{padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer}
 .item.sel{background:rgba(31,95,214,.14)}
 .item b{display:block}.item small{color:var(--muted)}
 .badge{display:inline-block;padding:0 6px;border-radius:9px;border:1px solid var(--line);font-size:12px;margin-left:6px}
 #detail{padding:10px 12px;border-top:1px solid var(--line);display:none}
-#detail select{width:100%;margin-top:6px}
-#msg{color:var(--muted);padding:0 4px}
+#detail input,#detail select{width:100%;margin-top:6px}
+.row{display:flex;gap:8px;margin-top:8px}.row button{flex:1}
+button.danger{color:var(--red)}
+details{border-top:1px solid var(--line)}
+summary{padding:8px 12px;cursor:pointer;color:var(--muted);text-transform:uppercase;font-size:13px;letter-spacing:.04em}
+#activity{max-height:160px;overflow:auto}
+#activity div{padding:4px 12px;font-size:12px;color:var(--muted)}
+#activity b{color:var(--text);font-weight:600}
+#msg{color:var(--red);padding:0 4px}
 .empty{margin:0 auto;padding:24px;color:var(--muted);text-align:center}
-@media (max-width:760px){main{flex-direction:column}aside{width:auto;height:40%;border-left:0;border-top:1px solid var(--line)}}
+dialog{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text);padding:20px;width:min(360px,92vw)}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog h2{margin:0 0 12px;font-size:16px}
+dialog input{width:100%;margin:4px 0 10px}
+dialog .err{color:var(--red);min-height:1.4em;font-size:13px}
+.member{display:flex;justify-content:space-between;align-items:center;padding:4px 0}
+@media (max-width:760px){main{flex-direction:column}aside{width:auto;height:45%;border-left:0;border-top:1px solid var(--line)}}
 </style>
 </head>
 <body>
 <header>
   <h1>Redline</h1>
-  <input type="file" id="file" accept="application/pdf">
+  <select id="docs" title="Your drawings" disabled><option value="">Documents…</option></select>
+  <label class="up"><input type="file" id="file" accept="application/pdf" hidden><button type="button" id="uploadBtn" disabled>Upload PDF</button></label>
   <div class="sep"></div>
   <button id="prev" disabled>&lsaquo;</button>
   <span id="pageLabel">&ndash;</span>
@@ -61,21 +72,25 @@ aside h2{font-size:13px;margin:0;padding:10px 12px;border-bottom:1px solid var(-
   <button data-tool="cloud">Cloud</button>
   <button data-tool="text">Text</button>
   <button data-tool="stamp">Stamp</button>
-  <input id="note" placeholder="Note / stamp text" size="18">
-  <input id="author" placeholder="Author" size="10">
+  <input id="note" placeholder="Note / stamp text" size="18" maxlength="500">
   <div class="sep"></div>
-  <button id="undo" disabled title="Undo (Ctrl+Z)">Undo</button><button id="redo" disabled title="Redo (Ctrl+Shift+Z)">Redo</button>
+  <button id="undo" disabled title="Undo your last action (Ctrl+Z)">Undo</button>
+  <button id="redo" disabled title="Redo (Ctrl+Shift+Z)">Redo</button>
   <div class="sep"></div>
+  <button id="share" disabled>Share</button>
   <a id="download" href="#"><button disabled id="dlbtn">Download PDF</button></a>
+  <span class="grow"></span>
   <span id="msg"></span>
+  <span id="who"></span>
+  <button id="logout" hidden>Sign out</button>
 </header>
 <main>
   <div id="stage">
-    <div class="empty" id="hint">Upload a drawing PDF to start redlining.</div>
+    <div class="empty" id="hint">Upload a drawing PDF, or pick one from Documents.</div>
     <div id="sheet"><img id="img" alt="Drawing sheet"><div id="overlay"></div></div>
   </div>
   <aside>
-    <h2>Markups on this sheet</h2>
+    <h2 id="docTitle">Markups on this sheet</h2>
     <div id="list"></div>
     <div id="detail">
       <b id="dTitle"></b>
@@ -88,146 +103,248 @@ aside h2{font-size:13px;margin:0;padding:10px 12px;border-bottom:1px solid var(-
         </select>
       </label>
     </div>
+    <details id="actDetails"><summary>Activity</summary><div id="activity"></div></details>
   </aside>
 </main>
+
+<dialog id="loginDlg">
+  <form method="dialog" id="loginForm">
+    <h2 id="loginTitle">Sign in</h2>
+    <label>Username <input id="lUser" autocomplete="username" required></label>
+    <label>Password <input id="lPass" type="password" autocomplete="current-password" minlength="1" required></label>
+    <div class="err" id="lErr"></div>
+    <div class="row"><button type="submit" class="primary" id="lGo">Sign in</button><button type="button" id="lSwitch">Create account</button></div>
+  </form>
+</dialog>
+<dialog id="shareDlg">
+  <h2>Share this drawing</h2>
+  <div id="members"></div>
+  <form id="shareForm" class="row" style="margin-top:12px">
+    <input id="shareUser" placeholder="Username" style="margin:0" required><button class="primary" type="submit">Add</button>
+  </form>
+  <div class="err" id="shareErr"></div>
+  <div class="row"><button type="button" id="shareClose">Close</button><button type="button" id="delDoc" class="danger">Delete drawing</button></div>
+</dialog>
+
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const S = {doc:null, info:null, page:0, zoom:100, markups:[], sel:null, tool:"select"};
+const S = {user:null, signupOpen:false, doc:null, info:null, page:0, zoom:100, markups:[], sel:null, tool:"select", signup:false, busy:false};
 const scale = () => S.zoom / 72;
+const JSONH = {"Content-Type":"application/json"};
+const send = (method, body) => ({method, headers:JSONH, body:JSON.stringify(body)});
+const base = () => `/documents/${S.doc}`;
 
-function say(t){ $("msg").textContent = t || ""; }
+function say(t){ $("msg").textContent = t || ""; if(t) clearTimeout(say.t), say.t = setTimeout(() => $("msg").textContent = "", 6000); }
 async function api(path, opts){
   const r = await fetch(path, opts);
-  if(!r.ok){ let d=""; try{ d=(await r.json()).detail }catch(e){} throw new Error(d || r.statusText); }
+  if(r.status === 401 && !path.startsWith("/auth/")){ showLogin(); throw new Error("Please sign in"); }
+  if(!r.ok){ let d=""; try{ d=(await r.json()).detail }catch(e){} throw new Error(typeof d === "string" && d ? d : r.statusText); }
   return r;
 }
+const getJSON = async (path, opts) => (await api(path, opts)).json();
 
-async function upload(file){
-  say("Uploading…");
-  const fd = new FormData(); fd.append("file", file);
+// ---------- sign in
+function showLogin(){
+  resetDoc();
+  S.user = null; refreshChrome();
+  if(!$("loginDlg").open) $("loginDlg").showModal();
+  setLoginMode(false);
+}
+function setLoginMode(signup){
+  S.signup = signup && S.signupOpen;
+  $("loginTitle").textContent = S.signup ? "Create account" : "Sign in";
+  $("lGo").textContent = S.signup ? "Create account" : "Sign in";
+  $("lPass").autocomplete = S.signup ? "new-password" : "current-password";
+  $("lPass").minLength = S.signup ? 10 : 1;
+  $("lSwitch").textContent = S.signup ? "I have an account" : "Create account";
+  $("lSwitch").hidden = !S.signupOpen;
+  $("lErr").textContent = S.signup ? "Password must be at least 10 characters." : "";
+}
+$("lSwitch").onclick = () => setLoginMode(!S.signup);
+$("loginDlg").addEventListener("cancel", e => e.preventDefault());
+$("loginForm").onsubmit = async e => {
+  e.preventDefault();
+  $("lErr").textContent = "";
   try{
-    S.doc = (await (await api("/documents",{method:"POST",body:fd})).json()).id;
-    S.info = await (await api(`/documents/${S.doc}/info`)).json();
-    S.page = 0; S.sel = null;
+    const r = await getJSON(S.signup ? "/auth/signup" : "/auth/login", send("POST", {username:$("lUser").value, password:$("lPass").value}));
+    $("lPass").value = ""; $("loginDlg").close();
+    S.user = r.user; refreshChrome(); await loadDocs();
+  }catch(err){ $("lErr").textContent = err.message; }
+};
+$("logout").onclick = async () => { try{ await api("/auth/logout", {method:"POST"}); }catch(e){} S.signupOpen = (await getJSON("/auth/status")).signup_open; showLogin(); };
+
+function refreshChrome(){
+  $("who").textContent = S.user ? `Signed in as ${S.user}` : "";
+  $("logout").hidden = !S.user;
+  $("docs").disabled = $("uploadBtn").disabled = !S.user;
+}
+
+// ---------- documents
+async function loadDocs(selectId){
+  const docs = await getJSON("/documents");
+  const sel = $("docs"); sel.replaceChildren(new Option("Documents…", ""));
+  for(const d of docs) sel.add(new Option(d.role === "owner" ? d.name : `${d.name} (from ${d.owner})`, d.id));
+  const remembered = selectId || safeGet("redline.doc");
+  const want = docs.some(d => d.id === remembered) ? remembered : (docs[0] && docs[0].id);
+  if(want){ sel.value = want; await openDoc(want); }
+  else { resetDoc(); }
+}
+function safeGet(k){ try{ return localStorage.getItem(k) }catch(e){ return null } }
+function safeSet(k,v){ try{ localStorage.setItem(k,v) }catch(e){} }
+
+function resetDoc(){
+  S.doc = null; S.info = null; S.markups = []; S.sel = null;
+  $("sheet").style.display = "none"; $("hint").style.display = "";
+  for(const id of ["dlbtn","undo","redo","share","prev","next"]) $(id).disabled = true;
+  $("pageLabel").textContent = "–"; $("docTitle").textContent = "Markups on this sheet";
+  $("list").replaceChildren(); $("detail").style.display = "none"; $("activity").replaceChildren();
+}
+$("docs").onchange = e => e.target.value ? openDoc(e.target.value) : resetDoc();
+$("uploadBtn").onclick = () => $("file").click();
+$("file").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if(!f) return;
+  say("");
+  const fd = new FormData(); fd.append("file", f);
+  try{ const r = await getJSON("/documents", {method:"POST", body:fd}); await loadDocs(r.id); }
+  catch(err){ say("Upload failed: " + err.message); }
+};
+
+async function openDoc(id){
+  try{
+    S.doc = id; S.page = 0; S.sel = null; safeSet("redline.doc", id);
     $("hint").style.display = "none"; $("sheet").style.display = "block";
-    $("dlbtn").disabled = false; $("download").href = `/documents/${S.doc}/file`;
-    say(""); await loadPage();
-  }catch(e){ say("Upload failed: " + e.message); }
+    $("dlbtn").disabled = false; $("download").href = `${base()}/file`;
+    await loadPage();
+  }catch(err){ say(err.message); }
 }
 
 async function loadPage(){
-  S.info = await (await api(`/documents/${S.doc}/info`)).json();
+  if(!S.doc) return;
+  S.info = await getJSON(`${base()}/info`);
   $("undo").disabled = !S.info.can_undo; $("redo").disabled = !S.info.can_redo;
-  if(S.page >= S.info.pages.length) S.page = S.info.pages.length - 1;
+  $("share").disabled = false;
+  $("docTitle").textContent = S.info.role === "owner" ? S.info.name : `${S.info.name} — owned by ${S.info.owner}`;
+  S.page = Math.min(S.page, S.info.pages.length - 1);
   const n = S.info.pages.length;
   $("pageLabel").textContent = `${S.page+1} / ${n}`;
   $("prev").disabled = S.page === 0; $("next").disabled = S.page >= n-1;
   const img = $("img");
-  await new Promise(res => {
-    img.onload = img.onerror = res;
-    img.src = `/documents/${S.doc}/pages/${S.page}.png?dpi=${S.zoom}&t=${Date.now()}`;
-  });
+  await new Promise(res => { img.onload = img.onerror = res; img.src = `${base()}/pages/${S.page}.png?dpi=${S.zoom}&t=${Date.now()}`; });
   await refreshMarkups();
+  loadActivity();
 }
-
 async function refreshMarkups(){
-  const all = await (await api(`/documents/${S.doc}/markups`)).json();
+  const all = await getJSON(`${base()}/markups`);
+  S.all = JSON.stringify(all);
   S.markups = all.filter(m => m.page === S.page);
-  if(S.sel && !S.markups.some(m => m.xref === S.sel)) S.sel = null;
+  if(S.sel && !S.markups.some(m => m.id === S.sel)) S.sel = null;
   render();
 }
+async function loadActivity(){
+  try{
+    const log = await getJSON(`${base()}/activity?limit=30`);
+    const box = $("activity"); box.replaceChildren();
+    for(const e of log){
+      const d = document.createElement("div"), b = document.createElement("b");
+      b.textContent = e.user; d.append(b, " " + e.summary); d.title = new Date(e.at * 1000).toLocaleString(); box.appendChild(d);
+    }
+  }catch(e){}
+}
 
+// ---------- drawing the sheet and list
 function render(){
   const ov = $("overlay"); ov.replaceChildren();
   const k = scale();
   for(const m of S.markups){
     const d = document.createElement("div");
-    d.className = `mk ${m.subject.replace(/\s/g,"")} ${m.status}${m.xref===S.sel?" sel":""}`;
+    d.className = `mk ${m.subject.replace(/\s/g,"")} ${m.status}${m.id===S.sel?" sel":""}`;
     const [x0,y0,x1,y1] = m.rect;
     Object.assign(d.style,{left:x0*k+"px",top:y0*k+"px",width:(x1-x0)*k+"px",height:(y1-y0)*k+"px"});
-    d.title = m.content;
-    d.onpointerdown = e => startEdit(e, m, d, "move");
-    if(m.xref === S.sel){ const h = document.createElement("div"); h.className = "h"; h.onpointerdown = e => startEdit(e, m, d, "resize"); d.appendChild(h); }
+    d.title = m.content; d.dataset.id = m.id;
+    d.onpointerdown = e => startEdit(e, m, "move");
+    if(m.id === S.sel){ const h = document.createElement("div"); h.className = "h"; h.onpointerdown = e => startEdit(e, m, "resize"); d.appendChild(h); }
     ov.appendChild(d);
   }
   const list = $("list"); list.replaceChildren();
   if(!S.markups.length){ const e=document.createElement("div"); e.className="empty"; e.textContent="No markups on this sheet."; list.appendChild(e); }
   for(const m of S.markups){
-    const d = document.createElement("div"); d.className = "item"+(m.xref===S.sel?" sel":"");
+    const d = document.createElement("div"); d.className = "item"+(m.id===S.sel?" sel":"");
     const b = document.createElement("b"); b.textContent = m.subject || m.type;
     const bd = document.createElement("span"); bd.className="badge"; bd.textContent = m.status; b.appendChild(bd);
     const s = document.createElement("small"); s.textContent = [m.author, m.content].filter(Boolean).join(" — ");
-    d.append(b, s); d.onclick = () => select(m.xref); list.appendChild(d);
+    d.append(b, s); d.onclick = () => select(m.id); list.appendChild(d);
   }
-  const m = S.markups.find(x => x.xref === S.sel);
+  const m = S.markups.find(x => x.id === S.sel);
   $("detail").style.display = m ? "block" : "none";
-  if(m){ $("dTitle").textContent = m.subject || m.type; $("dBody").textContent = m.author; $("dText").value = m.content; $("status").value = m.status; }
+  if(m){ $("dTitle").textContent = m.subject || m.type; $("dBody").textContent = m.author ? `by ${m.author}` : ""; $("dText").value = m.content; $("status").value = m.status; }
 }
+function select(id){ S.sel = id; render(); }
 
-function select(xref){ S.sel = xref; render(); }
-
-$("status").onchange = async e => {
-  const m = S.markups.find(x => x.xref === S.sel); if(!m) return;
-  try{
-    await api(`/documents/${S.doc}/markups/${m.page}/${m.xref}/status`,{method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({status:e.target.value, author:$("author").value})});
-    await loadPage();
-  }catch(err){ say("Status failed: " + err.message); }
-};
-
+// ---------- edit, status, delete, undo
 async function patch(m, body){
-  try{
-    const r = await (await api(`/documents/${S.doc}/markups/${m.page}/${m.xref}`,{method:"PATCH",
-      headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)})).json();
-    S.sel = r.xref; await loadPage();
-  }catch(err){ say("Edit failed: " + err.message); await loadPage(); }
+  try{ const r = await getJSON(`${base()}/markups/${m.id}`, send("PATCH", body)); S.sel = r.id; }
+  catch(err){ say("Edit failed: " + err.message); }
+  await loadPage();
 }
+$("status").onchange = async e => {
+  const m = S.markups.find(x => x.id === S.sel); if(!m) return;
+  try{ await api(`${base()}/markups/${m.id}/status`, send("POST", {status:e.target.value})); }
+  catch(err){ say("Status failed: " + err.message); }
+  await loadPage();
+};
+$("saveText").onclick = () => { const m = S.markups.find(x => x.id === S.sel); if(m) patch(m, {text:$("dText").value}); };
+$("dText").onkeydown = e => { if(e.key === "Enter") $("saveText").click(); };
+async function del(){
+  const m = S.markups.find(x => x.id === S.sel);
+  if(!m || !confirm("Delete this markup and its review status?")) return;
+  try{
+    const r = await getJSON(`${base()}/markups/${m.id}`, {method:"DELETE"}); S.sel = null;
+    if(!r.undoable) say("Deleted. This kind of markup can't be restored with Undo.");
+  }catch(err){ say("Delete failed: " + err.message); }
+  await loadPage();
+}
+$("del").onclick = del;
+async function history(kind){
+  if(!S.doc || $(kind).disabled) return;
+  try{ await api(`${base()}/${kind}`, {method:"POST"}); }catch(err){ say(err.message); }
+  await loadPage();
+}
+$("undo").onclick = () => history("undo");
+$("redo").onclick = () => history("redo");
+const typing = () => /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
+document.addEventListener("keydown", e => {
+  if($("loginDlg").open || $("shareDlg").open) return;
+  if(e.key === "Delete" && !typing()) return del();
+  if(!(e.ctrlKey || e.metaKey) || e.altKey || typing()) return;
+  const k = e.key.toLowerCase();
+  if(k === "z"){ e.preventDefault(); history(e.shiftKey ? "redo" : "undo"); }
+  else if(k === "y"){ e.preventDefault(); history("redo"); }
+});
 
-// Move or resize a markup by dragging it (select tool).
-function startEdit(e, m, el, mode){
+// ---------- move / resize / draw
+const ov = $("overlay");
+const pos = e => { const r = ov.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+function startEdit(e, m, mode){
   if(S.tool !== "select") return;
   e.stopPropagation(); e.preventDefault();
-  if(S.sel !== m.xref){ S.sel = m.xref; render(); }
-  dragMarkup(e, m, mode);
-}
-function dragMarkup(e, m, mode){
-  const el = [...$("overlay").querySelectorAll(".mk")][S.markups.findIndex(x => x.xref === m.xref)];
-  if(!el) return;
+  if(S.sel !== m.id){ S.sel = m.id; render(); }
+  const el = ov.querySelector(`.mk[data-id="${m.id}"]`); if(!el) return;
   const k = scale(), [px,py] = pos(e), [x0,y0,x1,y1] = m.rect;
   let moved = false, rect = m.rect.slice();
-  el.setPointerCapture(e.pointerId);
+  S.busy = true; el.setPointerCapture(e.pointerId);
   el.onpointermove = ev => {
     const dx = (pos(ev)[0]-px)/k, dy = (pos(ev)[1]-py)/k;
     if(Math.abs(dx*k) + Math.abs(dy*k) > 3) moved = true;
-    rect = mode === "move" ? [x0+dx,y0+dy,x1+dx,y1+dy]
-                           : [x0,y0,Math.max(x1+dx,x0+5),Math.max(y1+dy,y0+5)];
+    rect = mode === "move" ? [x0+dx,y0+dy,x1+dx,y1+dy] : [x0,y0,Math.max(x1+dx,x0+5),Math.max(y1+dy,y0+5)];
     Object.assign(el.style,{left:rect[0]*k+"px",top:rect[1]*k+"px",width:(rect[2]-rect[0])*k+"px",height:(rect[3]-rect[1])*k+"px"});
   };
-  el.onpointerup = () => { el.onpointermove = el.onpointerup = null; if(moved) patch(m, {rect}); };
+  el.onpointerup = () => { el.onpointermove = el.onpointerup = null; S.busy = false; if(moved) patch(m, {rect}); };
 }
-
-$("saveText").onclick = () => { const m = S.markups.find(x => x.xref === S.sel); if(m) patch(m, {text:$("dText").value}); };
-$("dText").onkeydown = e => { if(e.key === "Enter") $("saveText").click(); };
-async function del(){
-  const m = S.markups.find(x => x.xref === S.sel);
-  if(!m || !confirm("Delete this markup and its review status?")) return;
-  try{ await api(`/documents/${S.doc}/markups/${m.page}/${m.xref}`,{method:"DELETE"}); S.sel = null; await loadPage(); }
-  catch(err){ say("Delete failed: " + err.message); }
-}
-$("del").onclick = del;
-document.addEventListener("keydown", e => {
-  if(e.key === "Delete" && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) del();
-});
-
-// Drawing: drag a rectangle with the cloud / text / stamp tool.
 let drag = null;
-const ov = $("overlay");
-const pos = e => { const r = ov.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
 ov.addEventListener("pointerdown", e => {
   if(S.tool === "select" || !S.doc) return;
-  drag = {start: pos(e)}; ov.setPointerCapture(e.pointerId);
+  drag = {start: pos(e)}; S.busy = true; ov.setPointerCapture(e.pointerId);
   const d = document.createElement("div"); d.id = "draft"; ov.appendChild(d); drag.el = d;
 });
 ov.addEventListener("pointermove", e => {
@@ -237,42 +354,74 @@ ov.addEventListener("pointermove", e => {
 });
 ov.addEventListener("pointerup", async e => {
   if(!drag) return;
-  const [x,y] = pos(e), [sx,sy] = drag.start; drag.el.remove(); drag = null;
+  const [x,y] = pos(e), [sx,sy] = drag.start; drag.el.remove(); drag = null; S.busy = false;
   if(Math.abs(x-sx) < 8 || Math.abs(y-sy) < 8) return;
   const k = scale();
   const rect = [Math.min(x,sx)/k, Math.min(y,sy)/k, Math.max(x,sx)/k, Math.max(y,sy)/k];
   const text = $("note").value || (S.tool === "stamp" ? "Revised" : "");
   try{
-    const r = await (await api(`/documents/${S.doc}/markups`,{method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({type:S.tool,page:S.page,rect,text,author:$("author").value})})).json();
-    S.sel = r.xref; await loadPage(); setTool("select");
+    const r = await getJSON(`${base()}/markups`, send("POST", {type:S.tool, page:S.page, rect, text}));
+    S.sel = r.id; setTool("select");
   }catch(err){ say("Add failed: " + err.message); }
+  await loadPage();
 });
-
 function setTool(t){
   S.tool = t;
   document.querySelectorAll("[data-tool]").forEach(b => b.classList.toggle("on", b.dataset.tool === t));
   ov.style.cursor = t === "select" ? "default" : "crosshair";
 }
 document.querySelectorAll("[data-tool]").forEach(b => b.onclick = () => setTool(b.dataset.tool));
-$("file").onchange = e => e.target.files[0] && upload(e.target.files[0]);
-async function history(kind){
-  if(!S.doc || $(kind).disabled) return;
-  try{ await api(`/documents/${S.doc}/${kind}`,{method:"POST"}); await loadPage(); }
-  catch(err){ say(kind + " failed: " + err.message); }
-}
-$("undo").onclick = () => history("undo");
-$("redo").onclick = () => history("redo");
-document.addEventListener("keydown", e => {
-  if(!(e.ctrlKey || e.metaKey) || e.altKey || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
-  const k = e.key.toLowerCase();
-  if(k === "z"){ e.preventDefault(); history(e.shiftKey ? "redo" : "undo"); }
-  else if(k === "y"){ e.preventDefault(); history("redo"); }
-});
 $("prev").onclick = () => { S.page--; loadPage(); };
 $("next").onclick = () => { S.page++; loadPage(); };
 $("zoom").onchange = e => { S.zoom = +e.target.value; if(S.doc) loadPage(); };
+
+// ---------- sharing
+async function drawMembers(){
+  const box = $("members"); box.replaceChildren();
+  const owner = document.createElement("div"); owner.className = "member"; owner.textContent = `${S.info.owner} (owner)`; box.appendChild(owner);
+  for(const name of S.info.members){
+    const row = document.createElement("div"); row.className = "member";
+    const t = document.createElement("span"); t.textContent = name; row.appendChild(t);
+    if(S.info.role === "owner"){
+      const b = document.createElement("button"); b.textContent = "Remove";
+      b.onclick = async () => { try{ await api(`${base()}/share/${encodeURIComponent(name)}`, {method:"DELETE"}); S.info = await getJSON(`${base()}/info`); drawMembers(); }catch(err){ $("shareErr").textContent = err.message; } };
+      row.appendChild(b);
+    }
+    box.appendChild(row);
+  }
+  const own = S.info.role === "owner";
+  $("shareForm").hidden = $("delDoc").hidden = !own;
+}
+$("share").onclick = async () => { $("shareErr").textContent = ""; S.info = await getJSON(`${base()}/info`); drawMembers(); $("shareDlg").showModal(); };
+$("shareClose").onclick = () => $("shareDlg").close();
+$("shareForm").onsubmit = async e => {
+  e.preventDefault(); $("shareErr").textContent = "";
+  try{ await api(`${base()}/share`, send("POST", {username:$("shareUser").value})); $("shareUser").value = ""; S.info = await getJSON(`${base()}/info`); drawMembers(); }
+  catch(err){ $("shareErr").textContent = err.message; }
+};
+$("delDoc").onclick = async () => {
+  if(!confirm(`Delete "${S.info.name}" for everyone? This can't be undone.`)) return;
+  try{ await api(base(), {method:"DELETE"}); $("shareDlg").close(); safeSet("redline.doc", ""); await loadDocs(); }
+  catch(err){ $("shareErr").textContent = err.message; }
+};
+
+// ---------- pick up other people's edits
+setInterval(async () => {
+  if(!S.doc || S.busy || document.hidden || $("loginDlg").open || $("shareDlg").open) return;
+  try{
+    const all = JSON.stringify(await getJSON(`${base()}/markups`));
+    if(all !== S.all) await loadPage();
+  }catch(e){}
+}, 6000);
+
+// ---------- start
+(async () => {
+  try{
+    const st = await getJSON("/auth/status");
+    S.signupOpen = st.signup_open; S.user = st.user; refreshChrome();
+    if(S.user) await loadDocs(); else showLogin();
+  }catch(e){ say("Can't reach the server"); }
+})();
 </script>
 </body>
 </html>

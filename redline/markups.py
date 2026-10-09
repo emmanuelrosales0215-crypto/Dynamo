@@ -7,6 +7,7 @@ read and write them. Review status is a hidden reply annotation (/IRT) whose
 from __future__ import annotations
 
 import re
+import uuid
 from dataclasses import asdict, dataclass
 
 import pymupdf
@@ -17,6 +18,7 @@ RED = (1.0, 0.0, 0.0)
 
 @dataclass
 class Markup:
+    id: str            # stable /NM name, survives edits and cloud rebuilds
     page: int          # 0-based
     xref: int
     type: str
@@ -29,6 +31,35 @@ class Markup:
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+
+def get_id(doc: pymupdf.Document, xref: int) -> str | None:
+    kind, value = doc.xref_get_key(xref, "NM")
+    return value if kind == "string" else None
+
+
+def _set_id(doc: pymupdf.Document, xref: int, nm: str | None) -> None:
+    doc.xref_set_key(xref, "NM", f"({nm or uuid.uuid4().hex})")
+
+
+def ensure_ids(doc: pymupdf.Document) -> bool:
+    """Give every annotation a /NM name (Revu-made ones already have one)."""
+    changed = False
+    for page in doc:
+        for annot in page.annots() or []:
+            if get_id(doc, annot.xref) is None:
+                _set_id(doc, annot.xref, None)
+                changed = True
+    return changed
+
+
+def find(doc: pymupdf.Document, markup_id: str) -> tuple[int, int]:
+    """(page number, xref) of a top-level markup, or KeyError."""
+    for page in doc:
+        for annot in page.annots() or []:
+            if get_id(doc, annot.xref) == markup_id and _irt_xref(doc, annot.xref) is None:
+                return page.number, annot.xref
+    raise KeyError(f"no markup {markup_id}")
 
 
 def _irt_xref(doc: pymupdf.Document, xref: int) -> int | None:
@@ -48,12 +79,19 @@ def _rect(annot: pymupdf.Annot) -> pymupdf.Rect:
     return annot.rect
 
 
+def _set_info(doc: pymupdf.Document, annot: pymupdf.Annot, info: dict) -> None:
+    """set_info that can also clear the text (PyMuPDF skips an empty one)."""
+    annot.set_info(info)
+    if info.get("content", None) == "":
+        doc.xref_set_key(annot.xref, "Contents", "()")
+
+
 def _stamp_info(annot: pymupdf.Annot, author: str, subject: str, content: str) -> None:
     annot.set_info(title=author, subject=subject, content=content)
 
 
 def add_cloud(page: pymupdf.Page, rect, text: str = "", author: str = "",
-              color=RED) -> pymupdf.Annot:
+              color=RED, *, nm: str | None = None) -> pymupdf.Annot:
     """Revision cloud around ``rect``. The cloud effect is set via /BE."""
     r = pymupdf.Rect(rect)
     pts = [r.tl, r.tr, r.br, r.bl]
@@ -63,21 +101,23 @@ def add_cloud(page: pymupdf.Page, rect, text: str = "", author: str = "",
     _stamp_info(annot, author, "Cloud", text)
     annot.update()
     page.parent.xref_set_key(annot.xref, "BE", "<</S/C/I 2>>")
+    _set_id(page.parent, annot.xref, nm)
     return annot
 
 
 def add_text(page: pymupdf.Page, rect, text: str, author: str = "",
-             color=RED, fontsize: float = 10) -> pymupdf.Annot:
+             color=RED, fontsize: float = 10, *, nm: str | None = None) -> pymupdf.Annot:
     """Free-text callout."""
     annot = page.add_freetext_annot(pymupdf.Rect(rect), text, fontsize=fontsize,
                                     text_color=color)
     _stamp_info(annot, author, "Text Box", text)
     annot.update()
+    _set_id(page.parent, annot.xref, nm)
     return annot
 
 
 def add_stamp(page: pymupdf.Page, rect, label: str, author: str = "",
-              color=RED) -> pymupdf.Annot:
+              color=RED, *, nm: str | None = None) -> pymupdf.Annot:
     """Text stamp such as 'REVISED' or 'NOT FOR CONSTRUCTION'."""
     r = pymupdf.Rect(rect)
     annot = page.add_freetext_annot(r, label.upper(), fontsize=max(8.0, r.height * 0.5),
@@ -85,6 +125,7 @@ def add_stamp(page: pymupdf.Page, rect, label: str, author: str = "",
                                     align=pymupdf.TEXT_ALIGN_CENTER)
     _stamp_info(annot, author, "Stamp", label)
     annot.update()
+    _set_id(page.parent, annot.xref, nm)
     return annot
 
 
@@ -123,7 +164,7 @@ def list_markups(doc: pymupdf.Document) -> list[Markup]:
                 continue
             info = annot.info
             out.append(Markup(
-                page=page.number, xref=annot.xref, type=annot.type[1],
+                id=get_id(doc, annot.xref) or "", page=page.number, xref=annot.xref, type=annot.type[1],
                 author=info.get("title", ""), subject=info.get("subject", ""),
                 content=info.get("content", ""), rect=tuple(_rect(annot)),
                 color=annot.colors.get("stroke"), status="None"))
@@ -164,18 +205,19 @@ def update_markup(doc: pymupdf.Document, page_no: int, xref: int, *, rect=None,
         current = next(m for m in list_markups(doc) if m.xref == xref)
         new_rect = rect if rect is not None else _rect(annot)
         new_color = tuple(color) if color is not None else (annot.colors.get("stroke") or RED)
+        nm = get_id(doc, xref)
         delete_markup(doc, page_no, xref)
-        new = add_cloud(page, new_rect, info["content"], info["title"], new_color)
+        new = add_cloud(page, new_rect, info["content"], info["title"], new_color, nm=nm)
         if current.status != "None":
             set_status(doc, page_no, new.xref, current.status)
         return new.xref
     if kind == "FreeText":
         if rect is not None:
             annot.set_rect(pymupdf.Rect(rect))
-        annot.set_info(info)
+        _set_info(doc, annot, info)
         annot.update(**({"text_color": tuple(color)} if color is not None else {}))
         return xref
-    annot.set_info(info)
+    _set_info(doc, annot, info)
     if color is not None:
         annot.set_colors(stroke=tuple(color))
     if rect is not None:
@@ -191,3 +233,30 @@ def delete_markup(doc: pymupdf.Document, page_no: int, xref: int) -> None:
     for reply in replies:
         page.delete_annot(reply)
     page.delete_annot(_find(page, xref))
+
+
+RESTORABLE = {"Cloud": add_cloud, "Text Box": add_text, "Stamp": add_stamp}
+
+
+def snapshot(doc: pymupdf.Document, markup_id: str) -> dict:
+    page_no, xref = find(doc, markup_id)
+    m = next(m for m in list_markups(doc) if m.xref == xref)
+    snap = m.as_dict()
+    snap["restorable"] = m.subject in RESTORABLE
+    return snap
+
+
+def restore(doc: pymupdf.Document, snap: dict) -> None:
+    """Recreate a deleted markup (same id, text, place and review status)."""
+    try:
+        find(doc, snap["id"])
+    except KeyError:
+        pass
+    else:
+        raise FileExistsError(f"markup {snap['id']} already exists")
+    page = doc[snap["page"]]
+    color = tuple(snap["color"]) if snap.get("color") else RED
+    annot = RESTORABLE[snap["subject"]](page, snap["rect"], snap["content"],
+                                        snap["author"], color, nm=snap["id"])
+    if snap["status"] != "None":
+        set_status(doc, page.number, annot.xref, snap["status"], snap["author"])

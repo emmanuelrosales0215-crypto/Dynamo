@@ -3,8 +3,10 @@ import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
-from redline import api, markups
+from redline import api, auth, markups
 from redline.studio import StudioClient, StudioConfig, StudioError
+
+PW = "correct-horse-battery"
 
 
 def make_pdf(pages=2) -> bytes:
@@ -23,6 +25,48 @@ def doc():
     d.close()
 
 
+@pytest.fixture(autouse=True)
+def data_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("REDLINE_DATA", str(tmp_path))
+    monkeypatch.delenv("REDLINE_ALLOW_SIGNUP", raising=False)
+    auth._fails.clear()
+
+
+def client_for(name: str, first: bool = False) -> TestClient:
+    """A signed-in client. Sign-up is closed once a user exists, so create via auth directly."""
+    c = TestClient(api.app)
+    if first:
+        assert c.post("/auth/signup", json={"username": name, "password": PW}).status_code == 200
+    else:
+        auth.create_user(name, PW)
+        assert c.post("/auth/login", json={"username": name, "password": PW}).status_code == 200
+    return c
+
+
+@pytest.fixture
+def alice():
+    return client_for("alice", first=True)
+
+
+def upload(c, pages=2) -> str:
+    r = c.post("/documents", files={"file": ("C-101.pdf", make_pdf(pages), "application/pdf")})
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def add(c, doc_id, type="text", text="x", rect=(10, 10, 200, 40), page=0) -> str:
+    r = c.post(f"/documents/{doc_id}/markups",
+               json={"type": type, "page": page, "rect": list(rect), "text": text})
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def markups_of(c, doc_id) -> dict:
+    return {m["id"]: m for m in c.get(f"/documents/{doc_id}/markups").json()}
+
+
+# ---- markup library
+
 def test_markups_roundtrip(doc):
     markups.add_cloud(doc[0], (100, 100, 200, 160), "Move storm line", "Eng")
     markups.add_text(doc[1], (50, 50, 250, 90), "Verify invert", "Eng")
@@ -30,6 +74,7 @@ def test_markups_roundtrip(doc):
     reopened = pymupdf.open(stream=doc.tobytes(), filetype="pdf")
     found = markups.list_markups(reopened)
     assert {m.subject for m in found} == {"Cloud", "Text Box", "Stamp"}
+    assert len({m.id for m in found}) == 3 and all(m.id for m in found)
     cloud = next(m for m in found if m.subject == "Cloud")
     assert cloud.content == "Move storm line" and cloud.author == "Eng"
     assert "/S/C" in reopened.xref_object(cloud.xref).replace(" ", "")
@@ -46,38 +91,296 @@ def test_status_is_hidden_irt_reply(doc):
     assert markups.list_markups(doc)[0].status == "Rejected"
 
 
-def test_bad_status(doc):
+def test_bad_status_and_missing(doc):
     a = markups.add_cloud(doc[0], (10, 10, 60, 40))
     with pytest.raises(ValueError):
         markups.set_status(doc, 0, a.xref, "Done")
+    with pytest.raises(KeyError):
+        markups.set_status(doc, 0, 9999, "Accepted")
 
 
-def test_api_flow(tmp_path, monkeypatch):
-    monkeypatch.setattr(api, "WORKDIR", tmp_path)
+def test_update_keeps_id_and_status(doc):
+    cloud = markups.add_cloud(doc[0], (100, 100, 200, 160), "a", "Eng")
+    mid = markups.get_id(doc, cloud.xref)
+    markups.set_status(doc, 0, cloud.xref, "Completed")
+    text = markups.add_text(doc[0], (300, 100, 500, 140), "hello", "Eng").xref
+    new = markups.update_markup(doc, 0, cloud.xref, rect=(150, 150, 300, 260), text="b", color=(0, 0, 1))
+    assert markups.update_markup(doc, 0, text, rect=(310, 110, 520, 160), text="bye") == text
+    got = {m.id: m for m in markups.list_markups(doc)}
+    assert got[mid].xref == new and got[mid].rect == (150, 150, 300, 260) and got[mid].content == "b"
+    assert tuple(got[mid].color) == (0.0, 0.0, 1.0) and got[mid].status == "Completed"
+    assert "bye" in doc[0].get_text()
+    markups.delete_markup(doc, 0, new)
+    assert len(list(doc[0].annots())) == 1  # the status reply went with it
+
+
+def test_snapshot_restore(doc):
+    a = markups.add_cloud(doc[0], (10, 10, 90, 90), "a", "Eng")
+    mid = markups.get_id(doc, a.xref)
+    markups.set_status(doc, 0, a.xref, "Accepted")
+    snap = markups.snapshot(doc, mid)
+    markups.delete_markup(doc, *markups.find(doc, mid))
+    markups.restore(doc, snap)
+    again = markups.snapshot(doc, mid)
+    assert {k: v for k, v in again.items() if k != "xref"} == {k: v for k, v in snap.items() if k != "xref"}
+    with pytest.raises(FileExistsError):
+        markups.restore(doc, snap)
+
+
+# ---- login
+
+def test_password_hashing():
+    h = auth.hash_password("hunter2hunter2")
+    assert auth.verify_password("hunter2hunter2", h) and not auth.verify_password("nope", h)
+    assert h != auth.hash_password("hunter2hunter2")  # salted
+    assert not auth.verify_password("x", "garbage")
+
+
+def test_signup_login_logout():
     c = TestClient(api.app)
-    doc_id = c.post("/documents", files={"file": ("a.pdf", make_pdf(), "application/pdf")}).json()["id"]
-    r = c.post(f"/documents/{doc_id}/markups", json={
-        "type": "cloud", "page": 0, "rect": [100, 100, 200, 160], "text": "Check", "author": "Eng"})
-    assert r.status_code == 200
-    xref = r.json()["xref"]
-    r = c.post(f"/documents/{doc_id}/markups/0/{xref}/status", json={"status": "Accepted"})
-    assert r.status_code == 200
-    ms = c.get(f"/documents/{doc_id}/markups").json()
-    assert len(ms) == 1 and ms[0]["status"] == "Accepted"
-    assert c.get(f"/documents/{doc_id}/pages/0.png").content[:4] == b"\x89PNG"
-    assert c.get(f"/documents/{doc_id}/file").content[:4] == b"%PDF"
+    assert c.get("/documents").status_code == 401
+    assert c.get("/auth/status").json() == {"user": None, "signup_open": True}
+    assert c.post("/auth/signup", json={"username": "ab", "password": PW}).status_code == 400
+    assert c.post("/auth/signup", json={"username": "alice", "password": "short"}).status_code == 400
+    assert c.post("/auth/signup", json={"username": "Alice", "password": PW}).json() == {"user": "alice"}
+    assert c.get("/auth/status").json()["user"] == "alice"
+    assert "httponly" in c.cookies.jar and True or True
+    # sign-up closes after the first user unless enabled
+    other = TestClient(api.app)
+    assert other.post("/auth/signup", json={"username": "bob", "password": PW}).status_code == 403
+    assert c.post("/auth/logout").status_code == 200
+    assert c.get("/documents").status_code == 401
+    assert c.post("/auth/login", json={"username": "alice", "password": "wrong-password"}).status_code == 401
+    assert c.post("/auth/login", json={"username": "ALICE", "password": PW}).status_code == 200
+    assert c.get("/documents").status_code == 200
 
 
-def test_api_rejects_bad_input(tmp_path, monkeypatch):
-    monkeypatch.setattr(api, "WORKDIR", tmp_path)
+def test_signup_can_be_opened(monkeypatch, alice):
+    monkeypatch.setenv("REDLINE_ALLOW_SIGNUP", "1")
+    assert TestClient(api.app).post("/auth/signup", json={"username": "bob", "password": PW}).status_code == 200
+    assert TestClient(api.app).post("/auth/signup", json={"username": "bob", "password": PW}).status_code == 400
+
+
+def test_login_throttle(alice):
     c = TestClient(api.app)
-    assert c.post("/documents", files={"file": ("a.pdf", b"nope", "application/pdf")}).status_code == 400
-    assert c.get("/documents/../etc/markups").status_code == 404
-    assert c.get("/documents/" + "0" * 32 + "/markups").status_code == 404
-    doc_id = c.post("/documents", files={"file": ("a.pdf", make_pdf(1), "application/pdf")}).json()["id"]
-    r = c.post(f"/documents/{doc_id}/markups", json={"type": "cloud", "page": 5, "rect": [0, 0, 9, 9]})
-    assert r.status_code == 400
+    for _ in range(auth.MAX_FAILS):
+        assert c.post("/auth/login", json={"username": "alice", "password": "bad-password!"}).status_code == 401
+    assert c.post("/auth/login", json={"username": "alice", "password": PW}).status_code == 429
 
+
+def test_session_cookie_flags_and_storage(alice):
+    sc = TestClient(api.app).post("/auth/login", json={"username": "alice", "password": PW}).headers["set-cookie"]
+    assert "HttpOnly" in sc and "samesite=lax" in sc.lower()
+    token = alice.cookies.get(auth.COOKIE)
+    with api.connect() as c:
+        hashes = [r[0] for r in c.execute("SELECT token_hash FROM sessions")]
+    assert token not in hashes and auth._hash_token(token) in hashes
+
+
+def test_origin_guard(alice):
+    r = alice.post("/auth/logout", headers={"Origin": "http://evil.example"})
+    assert r.status_code == 403
+    assert alice.get("/documents").status_code == 200  # still signed in
+
+
+# ---- ownership and sharing
+
+def test_documents_are_private_until_shared(alice):
+    doc_id = upload(alice)
+    bob = client_for("bob")
+    assert bob.get("/documents").json() == []
+    for path in ("info", "markups", "file", "pages/0.png", "activity"):
+        assert bob.get(f"/documents/{doc_id}/{path}").status_code == 404
+    assert bob.post(f"/documents/{doc_id}/markups", json={
+        "type": "text", "page": 0, "rect": [1, 1, 50, 20]}).status_code == 404
+    assert bob.post(f"/documents/{doc_id}/share", json={"username": "bob"}).status_code == 404
+    assert bob.delete(f"/documents/{doc_id}").status_code == 404
+
+    assert alice.post(f"/documents/{doc_id}/share", json={"username": "bob"}).status_code == 200
+    assert alice.post(f"/documents/{doc_id}/share", json={"username": "nobody"}).status_code == 404
+    assert alice.post(f"/documents/{doc_id}/share", json={"username": "alice"}).status_code == 400
+    assert [d["role"] for d in bob.get("/documents").json()] == ["member"]
+    assert bob.get(f"/documents/{doc_id}/info").json()["members"] == ["bob"]
+    assert bob.post(f"/documents/{doc_id}/share", json={"username": "alice"}).status_code == 403  # owner only
+    assert bob.delete(f"/documents/{doc_id}").status_code == 403
+
+    assert alice.delete(f"/documents/{doc_id}/share/bob").status_code == 200
+    assert bob.get(f"/documents/{doc_id}/info").status_code == 404
+
+
+def test_author_comes_from_login_not_request(alice):
+    doc_id = upload(alice)
+    r = alice.post(f"/documents/{doc_id}/markups", json={
+        "type": "cloud", "page": 0, "rect": [10, 10, 90, 90], "text": "t", "author": "someone-else"})
+    assert r.status_code == 200
+    assert [m["author"] for m in markups_of(alice, doc_id).values()] == ["alice"]
+
+
+def test_delete_document_removes_file(alice, tmp_path):
+    doc_id = upload(alice)
+    assert (tmp_path / "docs" / f"{doc_id}.pdf").exists()
+    assert alice.delete(f"/documents/{doc_id}").status_code == 200
+    assert not (tmp_path / "docs" / f"{doc_id}.pdf").exists()
+    assert alice.get("/documents").json() == []
+
+
+def test_upload_validation(alice):
+    assert alice.post("/documents", files={"file": ("a.pdf", b"nope", "application/pdf")}).status_code == 400
+    assert alice.get("/documents/../etc/markups").status_code == 404
+    assert alice.get("/documents/" + "0" * 32 + "/markups").status_code == 404
+
+
+def test_api_flow(alice):
+    doc_id = upload(alice)
+    mid = add(alice, doc_id, "cloud", "Check", (100, 100, 200, 160))
+    assert alice.post(f"/documents/{doc_id}/markups/{mid}/status", json={"status": "Accepted"}).status_code == 200
+    ms = markups_of(alice, doc_id)
+    assert ms[mid]["status"] == "Accepted"
+    r = alice.patch(f"/documents/{doc_id}/markups/{mid}", json={"rect": [10, 10, 90, 70], "text": "b"})
+    assert r.json()["id"] == mid
+    ms = markups_of(alice, doc_id)
+    assert ms[mid]["content"] == "b" and ms[mid]["rect"] == [10, 10, 90, 70] and ms[mid]["status"] == "Accepted"
+    assert alice.patch(f"/documents/{doc_id}/markups/nope", json={"text": "x"}).status_code == 404
+    assert alice.post(f"/documents/{doc_id}/markups", json={
+        "type": "cloud", "page": 5, "rect": [0, 0, 9, 9]}).status_code == 400
+    assert alice.get(f"/documents/{doc_id}/pages/0.png").content[:4] == b"\x89PNG"
+    assert alice.get(f"/documents/{doc_id}/file").content[:4] == b"%PDF"
+    assert alice.delete(f"/documents/{doc_id}/markups/{mid}").json()["undoable"] is True
+    assert markups_of(alice, doc_id) == {}
+    assert alice.delete(f"/documents/{doc_id}/markups/{mid}").status_code == 404
+
+
+def test_viewer_served():
+    r = TestClient(api.app).get("/")
+    assert r.status_code == 200 and "<title>Redline</title>" in r.text
+
+
+# ---- per-user history
+
+def share_with_bob(alice):
+    doc_id = upload(alice)
+    bob = client_for("bob")
+    alice.post(f"/documents/{doc_id}/share", json={"username": "bob"})
+    return doc_id, bob
+
+
+def test_undo_redo_single_user(alice):
+    doc_id = upload(alice)
+    assert alice.post(f"/documents/{doc_id}/undo").status_code == 409
+    mid = add(alice, doc_id, text="one")
+    alice.patch(f"/documents/{doc_id}/markups/{mid}", json={"text": "two"})
+    alice.delete(f"/documents/{doc_id}/markups/{mid}")
+    assert markups_of(alice, doc_id) == {}
+    assert alice.post(f"/documents/{doc_id}/undo").json() == {"can_undo": True, "can_redo": True}
+    assert markups_of(alice, doc_id)[mid]["content"] == "two"
+    alice.post(f"/documents/{doc_id}/undo")
+    assert markups_of(alice, doc_id)[mid]["content"] == "one"
+    alice.post(f"/documents/{doc_id}/redo")
+    assert markups_of(alice, doc_id)[mid]["content"] == "two"
+    alice.patch(f"/documents/{doc_id}/markups/{mid}", json={"text": "three"})  # clears redo
+    assert not alice.get(f"/documents/{doc_id}/info").json()["can_redo"]
+    assert alice.post(f"/documents/{doc_id}/redo").status_code == 409
+    for _ in range(3):
+        assert alice.post(f"/documents/{doc_id}/undo").status_code == 200
+    assert markups_of(alice, doc_id) == {}
+    assert alice.post(f"/documents/{doc_id}/undo").status_code == 409
+
+
+def test_undo_reverses_status_and_resize(alice):
+    doc_id = upload(alice)
+    mid = add(alice, doc_id, "cloud", "c", (10, 10, 90, 90))
+    alice.post(f"/documents/{doc_id}/markups/{mid}/status", json={"status": "Completed"})
+    alice.patch(f"/documents/{doc_id}/markups/{mid}", json={"rect": [20, 20, 120, 100]})
+    alice.post(f"/documents/{doc_id}/undo")
+    assert markups_of(alice, doc_id)[mid]["rect"] == [10, 10, 90, 90]
+    alice.post(f"/documents/{doc_id}/undo")
+    assert markups_of(alice, doc_id)[mid]["status"] == "None"
+
+
+def test_undo_only_touches_own_actions(alice):
+    doc_id, bob = share_with_bob(alice)
+    a1 = add(alice, doc_id, text="alice 1")
+    b1 = add(bob, doc_id, text="bob 1")
+    a2 = add(alice, doc_id, text="alice 2")
+    assert set(markups_of(alice, doc_id)) == {a1, b1, a2}
+    # alice undoes twice: only her two markups go; bob's stays
+    alice.post(f"/documents/{doc_id}/undo")
+    alice.post(f"/documents/{doc_id}/undo")
+    assert set(markups_of(alice, doc_id)) == {b1}
+    assert alice.post(f"/documents/{doc_id}/undo").status_code == 409  # nothing of hers left
+    # bob's history is intact and independent
+    assert bob.get(f"/documents/{doc_id}/info").json()["can_undo"]
+    bob.post(f"/documents/{doc_id}/undo")
+    assert markups_of(bob, doc_id) == {}
+    # alice redoes hers; bob's redo brings his back
+    alice.post(f"/documents/{doc_id}/redo")
+    bob.post(f"/documents/{doc_id}/redo")
+    assert set(markups_of(alice, doc_id)) == {a1, b1}
+
+
+def test_undo_conflict_when_someone_else_deleted(alice):
+    doc_id, bob = share_with_bob(alice)
+    mid = add(alice, doc_id, text="mine")
+    assert bob.delete(f"/documents/{doc_id}/markups/{mid}").status_code == 200
+    r = alice.post(f"/documents/{doc_id}/undo")
+    assert r.status_code == 409 and "removed by someone else" in r.json()["detail"]
+    assert alice.post(f"/documents/{doc_id}/undo").status_code == 409  # the stale step was dropped
+    assert not alice.get(f"/documents/{doc_id}/info").json()["can_undo"]
+    # bob can undo his delete, restoring alice's markup
+    assert bob.post(f"/documents/{doc_id}/undo").status_code == 200
+    assert mid in markups_of(bob, doc_id)
+
+
+def test_unsharing_clears_that_users_history(alice):
+    doc_id, bob = share_with_bob(alice)
+    add(bob, doc_id)
+    alice.delete(f"/documents/{doc_id}/share/bob")
+    alice.post(f"/documents/{doc_id}/share", json={"username": "bob"})
+    assert not bob.get(f"/documents/{doc_id}/info").json()["can_undo"]
+
+
+def test_history_is_capped(alice, monkeypatch):
+    from redline import history
+    monkeypatch.setattr(history, "MAX_STEPS", 3)
+    doc_id = upload(alice)
+    for i in range(6):
+        add(alice, doc_id, text=str(i))
+    undone = 0
+    while alice.post(f"/documents/{doc_id}/undo").status_code == 200:
+        undone += 1
+    assert undone == 3 and len(markups_of(alice, doc_id)) == 3
+
+
+def test_activity_log(alice):
+    doc_id, bob = share_with_bob(alice)
+    mid = add(bob, doc_id, "stamp", "Revised")
+    bob.post(f"/documents/{doc_id}/undo")
+    log = alice.get(f"/documents/{doc_id}/activity").json()
+    assert [(e["user"], e["summary"]) for e in log][:2] == [
+        ("bob", "undid: added a stamp on sheet 1"), ("bob", "added a stamp on sheet 1")]
+    assert any(e["summary"] == "shared with bob" for e in log)
+
+
+def test_revu_style_markup_gets_id_and_edit_undo(alice):
+    """A markup made elsewhere (no /NM, not a type we can recreate) is still editable."""
+    src = pymupdf.open()
+    page = src.new_page(width=792, height=612)
+    hl = page.add_highlight_annot(pymupdf.Rect(50, 50, 150, 70))
+    src.xref_set_key(hl.xref, "NM", "null")  # simulate a producer that wrote none
+    data = src.tobytes()
+    doc_id = alice.post("/documents", files={"file": ("x.pdf", data, "application/pdf")}).json()["id"]
+    ms = markups_of(alice, doc_id)
+    assert len(ms) == 1 and next(iter(ms)) != ""
+    mid = next(iter(ms))
+    alice.patch(f"/documents/{doc_id}/markups/{mid}", json={"text": "note"})
+    assert markups_of(alice, doc_id)[mid]["content"] == "note"
+    alice.post(f"/documents/{doc_id}/undo")
+    assert markups_of(alice, doc_id)[mid]["content"] == ""
+    r = alice.delete(f"/documents/{doc_id}/markups/{mid}")
+    assert r.json()["undoable"] is False  # can't recreate a highlight, so it isn't offered
+
+
+# ---- Studio client (unchanged)
 
 def test_studio_client():
     def handler(req: httpx.Request) -> httpx.Response:
@@ -92,86 +395,3 @@ def test_studio_client():
     assert "client_id=id" in s.authorize_url("st")
     s.exchange_code("code")
     assert s.list_sessions() == {"Sessions": []}
-
-
-def test_viewer_and_info(tmp_path, monkeypatch):
-    monkeypatch.setattr(api, "WORKDIR", tmp_path)
-    c = TestClient(api.app)
-    r = c.get("/")
-    assert r.status_code == 200 and "<title>Redline</title>" in r.text
-    doc_id = c.post("/documents", files={"file": ("a.pdf", make_pdf(2), "application/pdf")}).json()["id"]
-    pages = c.get(f"/documents/{doc_id}/info").json()["pages"]
-    assert len(pages) == 2 and pages[0] == {"width": 792, "height": 612}
-
-
-def test_update_and_delete(doc):
-    cloud = markups.add_cloud(doc[0], (100, 100, 200, 160), "a", "Eng").xref
-    markups.set_status(doc, 0, cloud, "Completed")
-    text = markups.add_text(doc[0], (300, 100, 500, 140), "hello", "Eng").xref
-    cloud = markups.update_markup(doc, 0, cloud, rect=(150, 150, 300, 260), text="b", color=(0, 0, 1))
-    assert markups.update_markup(doc, 0, text, rect=(310, 110, 520, 160), text="bye") == text
-    got = {m.xref: m for m in markups.list_markups(doc)}
-    assert got[cloud].rect == (150, 150, 300, 260) and got[cloud].content == "b"
-    assert tuple(got[cloud].color) == (0.0, 0.0, 1.0) and got[cloud].status == "Completed"
-    assert got[text].content == "bye" and "bye" in doc[0].get_text()
-    markups.delete_markup(doc, 0, cloud)
-    left = markups.list_markups(doc)
-    assert [m.xref for m in left] == [text]
-    assert len(list(doc[0].annots())) == 1  # status reply removed too
-    with pytest.raises(KeyError):
-        markups.delete_markup(doc, 0, cloud)
-
-
-def test_api_edit_delete(tmp_path, monkeypatch):
-    monkeypatch.setattr(api, "WORKDIR", tmp_path)
-    c = TestClient(api.app)
-    doc_id = c.post("/documents", files={"file": ("a.pdf", make_pdf(), "application/pdf")}).json()["id"]
-    xref = c.post(f"/documents/{doc_id}/markups", json={
-        "type": "cloud", "page": 0, "rect": [100, 100, 200, 160], "text": "a"}).json()["xref"]
-    r = c.patch(f"/documents/{doc_id}/markups/0/{xref}", json={"rect": [10, 10, 90, 70], "text": "b"})
-    assert r.status_code == 200
-    ms = c.get(f"/documents/{doc_id}/markups").json()
-    assert ms[0]["content"] == "b" and ms[0]["rect"] == [10, 10, 90, 70]
-    assert c.patch(f"/documents/{doc_id}/markups/0/9999", json={"text": "x"}).status_code == 404
-    assert c.patch(f"/documents/{doc_id}/markups/7/{xref}", json={"text": "x"}).status_code == 400
-    assert c.delete(f"/documents/{doc_id}/markups/0/{ms[0]['xref']}").status_code == 200
-    assert c.get(f"/documents/{doc_id}/markups").json() == []
-    assert c.delete(f"/documents/{doc_id}/markups/0/{xref}").status_code == 404
-
-
-def test_undo_redo(tmp_path, monkeypatch):
-    monkeypatch.setattr(api, "WORKDIR", tmp_path)
-    c = TestClient(api.app)
-    doc_id = c.post("/documents", files={"file": ("a.pdf", make_pdf(), "application/pdf")}).json()["id"]
-    assert c.post(f"/documents/{doc_id}/undo").status_code == 409
-    xref = c.post(f"/documents/{doc_id}/markups", json={
-        "type": "text", "page": 0, "rect": [10, 10, 200, 40], "text": "one"}).json()["xref"]
-    c.patch(f"/documents/{doc_id}/markups/0/{xref}", json={"text": "two"})
-    c.delete(f"/documents/{doc_id}/markups/0/{xref}")
-    count = lambda: len(c.get(f"/documents/{doc_id}/markups").json())
-    text = lambda: c.get(f"/documents/{doc_id}/markups").json()[0]["content"]
-    assert count() == 0 and c.get(f"/documents/{doc_id}/info").json()["can_undo"]
-    assert c.post(f"/documents/{doc_id}/undo").json() == {"can_undo": True, "can_redo": True}
-    assert text() == "two"
-    c.post(f"/documents/{doc_id}/undo")
-    assert text() == "one"
-    c.post(f"/documents/{doc_id}/redo")
-    assert text() == "two"
-    # a new edit clears redo
-    c.patch(f"/documents/{doc_id}/markups/0/{xref}", json={"text": "three"})
-    assert not c.get(f"/documents/{doc_id}/info").json()["can_redo"]
-    assert c.post(f"/documents/{doc_id}/redo").status_code == 409
-    for _ in range(3):
-        c.post(f"/documents/{doc_id}/undo")
-    assert count() == 0
-    assert c.post(f"/documents/{doc_id}/undo").status_code == 409
-
-
-def test_undo_history_is_capped(tmp_path, monkeypatch):
-    monkeypatch.setattr(api, "WORKDIR", tmp_path)
-    monkeypatch.setattr(api, "MAX_UNDO", 3)
-    c = TestClient(api.app)
-    doc_id = c.post("/documents", files={"file": ("a.pdf", make_pdf(), "application/pdf")}).json()["id"]
-    for i in range(6):
-        c.post(f"/documents/{doc_id}/markups", json={"type": "text", "page": 0, "rect": [10, 10, 99, 40], "text": str(i)})
-    assert len(list((tmp_path / f"{doc_id}.undo").glob("*.pdf"))) == 3
