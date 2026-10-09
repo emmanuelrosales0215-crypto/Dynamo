@@ -27,10 +27,10 @@ def _edit_fields(state: dict) -> dict:
             "color": list(state["color"]) if state.get("color") else None}
 
 
-def edit_op(before: dict, after: dict) -> dict:
-    """Record only the fields the edit changed, so undo never touches the rest."""
+def edit_op(before: dict, after: dict, fields: set[str]) -> dict:
+    """Record only the fields the user asked to change (redrawing can nudge other fields)."""
     b, a = _edit_fields(before), _edit_fields(after)
-    keys = [k for k in b if b[k] != a[k]]
+    keys = [k for k in b if k in fields and b[k] != a[k]]
     return {"t": "edit", "id": after["id"],
             "before": {k: b[k] for k in keys}, "after": {k: a[k] for k in keys}}
 
@@ -65,6 +65,8 @@ def run(doc: pymupdf.Document, op: dict, undo: bool) -> None:
         raise Conflict("that markup was removed by someone else") from None
     except FileExistsError:
         raise Conflict("that markup already exists again") from None
+    except ValueError as e:
+        raise Conflict(str(e)) from None
 
 
 def record(doc_id: str, user_id: int, op: dict) -> None:

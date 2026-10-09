@@ -25,7 +25,8 @@ main{flex:1;display:flex;min-height:0}
 #overlay{position:absolute;inset:0}
 .mk{position:absolute;border:2px solid var(--red);cursor:pointer}
 .mk.Cloud{border-style:dashed;border-radius:14px}
-.mk.sel{outline:3px solid var(--accent);cursor:move}
+.mk.sel{outline:3px solid var(--accent)}
+.mk.sel.mv{cursor:move}
 .mk.Completed,.mk.Accepted{opacity:.45}
 .mk.Rejected,.mk.Canceled{opacity:.45;border-color:#888}
 .h{position:absolute;right:-7px;bottom:-7px;width:12px;height:12px;background:var(--accent);border:2px solid #fff;border-radius:3px;cursor:nwse-resize}
@@ -271,12 +272,14 @@ function render(){
   const k = scale();
   for(const m of S.markups){
     const d = document.createElement("div");
-    d.className = `mk ${m.subject.replace(/\s/g,"")} ${m.status}${m.id===S.sel?" sel":""}`;
+    d.className = `mk ${m.subject.replace(/[^A-Za-z]/g,"")} ${m.status}${m.id===S.sel?" sel":""}${m.movable?" mv":""}`;
     const [x0,y0,x1,y1] = m.rect;
     Object.assign(d.style,{left:x0*k+"px",top:y0*k+"px",width:(x1-x0)*k+"px",height:(y1-y0)*k+"px"});
     d.title = m.content; d.dataset.id = m.id;
-    d.onpointerdown = e => startEdit(e, m, "move");
-    if(m.id === S.sel){ const h = document.createElement("div"); h.className = "h"; h.onpointerdown = e => startEdit(e, m, "resize"); d.appendChild(h); }
+    if(m.movable) d.onpointerdown = e => startEdit(e, m, "move");
+    else d.onpointerdown = e => { if(S.tool === "select"){ e.stopPropagation(); select(m.id); } };
+    if(!m.movable) d.style.cursor = "pointer";
+    if(m.id === S.sel && m.movable){ const h = document.createElement("div"); h.className = "h"; h.onpointerdown = e => startEdit(e, m, "resize"); d.appendChild(h); }
     ov.appendChild(d);
   }
   const list = $("list"); list.replaceChildren();
@@ -290,13 +293,13 @@ function render(){
   }
   const m = S.markups.find(x => x.id === S.sel);
   $("detail").style.display = m ? "block" : "none";
-  if(m){ $("dTitle").textContent = m.subject || m.type; $("dBody").textContent = m.author ? `by ${m.author}` : ""; $("dText").value = m.content; $("status").value = m.status; }
+  if(m){ $("dTitle").textContent = m.subject || m.type; $("dBody").textContent = (m.author ? `by ${m.author}` : "") + (m.movable ? "" : " · made in another program: text and status only"); $("dText").value = m.content; $("status").value = m.status; }
 }
 function select(id){ S.sel = id; render(); }
 
 // ---------- edit, status, delete, undo
 async function patch(m, body){
-  try{ const r = await getJSON(`${base()}/markups/${m.id}`, send("PATCH", body)); S.sel = r.id; }
+  try{ const r = await getJSON(`${base()}/markups/${m.id}`, send("PATCH", body)); S.sel = r.id; if(r.warning) say(r.warning); }
   catch(err){ say("Edit failed: " + err.message); }
   await loadPage();
 }

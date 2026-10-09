@@ -511,3 +511,98 @@ def test_review_clean_caps_findings():
     many = {"summary": "x" * 900, "findings": [finding("a") for _ in range(60)]}
     out = review.clean(many, {"a"})
     assert len(out["findings"]) == review.MAX_FINDINGS and len(out["summary"]) == review.MAX_TEXT
+
+
+# ---- behaviour learned from a real Revu-marked-up Civil 3D set (synthetic stand-ins)
+
+def revu_like_pdf() -> bytes:
+    """A callout (FreeText) with a grouped cloud, a status reply, and a CAD text box."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=792, height=612)
+    call = page.add_freetext_annot(pymupdf.Rect(100, 100, 200, 130), "MATCH LEGEND", fontsize=10)
+    call.set_info(title="Reviewer", subject="Cloud+", content="MATCH LEGEND")
+    call.update()
+    rc = ('<?xml version="1.0"?><body xmlns="http://www.w3.org/1999/xhtml" style="color:#008000">'
+          '<p style="color:#008000">MATCH LEGEND</p></body>')
+    doc.xref_set_key(call.xref, "RC", pymupdf.get_pdf_str(rc))
+    cloud = page.add_polygon_annot([(80, 150), (400, 150), (400, 300), (80, 300)])
+    cloud.set_info(title="Reviewer", subject="Cloud+")
+    cloud.update()
+    cloud.set_irt_xref(call.xref)
+    doc.xref_set_key(cloud.xref, "RT", "/Group")
+    shx = page.add_rect_annot(pymupdf.Rect(300, 50, 330, 60))
+    shx.set_info(title="AutoCAD SHX Text", content="SS")
+    shx.update()
+    shx.set_flags(64)
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def upload_revu(c) -> tuple[str, dict]:
+    doc_id = c.post("/documents", files={"file": ("revu.pdf", revu_like_pdf(), "application/pdf")}).json()["id"]
+    ms = list(markups_of(c, doc_id).values())
+    assert len(ms) == 1, ms  # the CAD text box is hidden and the cloud is folded into the callout
+    return doc_id, ms[0]
+
+
+def test_cad_text_and_grouped_parts_are_folded_away(alice):
+    doc_id, m = upload_revu(alice)
+    assert m["subject"] == "Cloud+" and m["content"] == "MATCH LEGEND"
+    assert m["grouped"] and not m["native"] and not m["movable"]
+    assert m["rect"][3] >= 300 and m["rect"][0] <= 80  # rect covers the grouped cloud too
+
+
+def test_markups_from_other_programs_keep_geometry_but_allow_text_and_status(alice):
+    doc_id, m = upload_revu(alice)
+    url = f"/documents/{doc_id}/markups/{m['id']}"
+    r = alice.patch(url, json={"rect": [0, 0, 50, 50]})
+    assert r.status_code == 400 and "another program" in r.json()["detail"]
+    assert alice.patch(url, json={"color": [0, 0, 1]}).status_code == 400
+    assert alice.post(url + "/status", json={"status": "Rejected"}).status_code == 200
+    r = alice.patch(url, json={"text": "MATCH LEGEND - REVISED PER REVIEW"})
+    assert r.status_code == 200 and "cut off" in r.json()["warning"]
+    got = markups_of(alice, doc_id)[m["id"]]
+    assert got["content"].endswith("PER REVIEW") and got["status"] == "Rejected"
+    # the rich-text copy Revu re-reads when you edit carries the new text and keeps its style
+    pdf = pymupdf.open(stream=alice.get(f"/documents/{doc_id}/file").content, filetype="pdf")
+    rc = pdf.xref_get_key(got["xref"], "RC")[1]
+    assert "PER REVIEW</p>" in rc and 'color:#008000' in rc
+
+
+def test_undo_on_markup_from_other_program_does_not_crash(alice):
+    doc_id, m = upload_revu(alice)
+    url = f"/documents/{doc_id}/markups/{m['id']}"
+    alice.patch(url, json={"text": "changed"})
+    alice.post(url + "/status", json={"status": "Completed"})
+    assert alice.post(f"/documents/{doc_id}/undo").status_code == 200
+    assert alice.post(f"/documents/{doc_id}/undo").status_code == 200
+    got = markups_of(alice, doc_id)[m["id"]]
+    assert got["content"] == "MATCH LEGEND" and got["status"] == "None"
+
+
+def test_deleting_removes_grouped_parts_but_is_not_undoable(alice):
+    doc_id, m = upload_revu(alice)
+    r = alice.delete(f"/documents/{doc_id}/markups/{m['id']}")
+    assert r.status_code == 200 and r.json()["undoable"] is False
+    pdf = pymupdf.open(stream=alice.get(f"/documents/{doc_id}/file").content, filetype="pdf")
+    left = [a.info.get("title") for a in pdf[0].annots()]
+    assert left == ["AutoCAD SHX Text"]  # callout and its cloud gone, CAD text untouched
+    assert alice.post(f"/documents/{doc_id}/undo").status_code == 409
+
+
+def test_status_reply_matches_revu_conventions(doc):
+    a = markups.add_cloud(doc[0], (10, 10, 60, 40), "x", "Eng")
+    reply = markups.set_status(doc, 0, a.xref, "Completed", "Rev")
+    assert doc.xref_get_key(reply, "Subj")[1] == "Set to Completed"
+    assert doc.xref_get_key(reply, "Name")[1] == "/Note"
+    assert doc.xref_get_key(reply, "F")[1] == "30"
+    assert doc.xref_get_key(reply, "State")[1] == "Completed"
+    assert doc.xref_get_key(reply, "StateModel")[1] == "Review"
+
+
+def test_only_our_markups_are_movable(alice):
+    doc_id = upload(alice)
+    mid = add(alice, doc_id, "cloud")
+    assert markups_of(alice, doc_id)[mid]["movable"] is True
+    assert alice.patch(f"/documents/{doc_id}/markups/{mid}", json={"rect": [20, 20, 120, 100]}).status_code == 200

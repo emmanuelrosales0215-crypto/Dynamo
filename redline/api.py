@@ -102,6 +102,9 @@ def _mutate(doc_id: str, user: User, work: Callable[[pymupdf.Document], tuple[di
         except KeyError as e:
             doc.close()
             raise HTTPException(404, str(e).strip("'\""))
+        except ValueError as e:
+            doc.close()
+            raise HTTPException(400, str(e))
         except Exception:
             doc.close()
             raise
@@ -290,7 +293,13 @@ def edit_markup(doc_id: str, markup_id: str, body: MarkupEdit,
         before = markups.snapshot(doc, markup_id)
         markups.update_markup(doc, page, xref, rect=body.rect, text=body.text, color=body.color)
         after = markups.snapshot(doc, markup_id)
-        return ({"id": markup_id, "page": after["page"]}, history.edit_op(before, after),
+        asked = {k for k in ("rect", "text", "color") if getattr(body, k) is not None}
+        result = {"id": markup_id, "page": after["page"]}
+        if body.text is not None and after["type"] == "FreeText" and \
+                markups.text_overflows(doc, markups.find(doc, markup_id)[1], body.text):
+            result["warning"] = ("The text is longer than the box and may be cut off in the drawing. "
+                                 "Boxes made in other programs can't be resized here.")
+        return (result, history.edit_op(before, after, asked),
                 f"edited a {after['subject'].lower()} on sheet {after['page'] + 1}")
     return _mutate(doc_id, user, work)
 

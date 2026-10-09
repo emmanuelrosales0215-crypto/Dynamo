@@ -88,14 +88,24 @@ All routes except `/auth/*` and `/` need a signed-in session.
 
 ## Status and limits
 
-- Tested on generated PDFs, in a headless browser with two signed-in users. **Not yet tested
-  against real Revu-authored files**; do that first.
+- Tested on generated PDFs and in a headless browser with two signed-in users. Also run once
+  against a real 13-sheet Civil 3D set marked up in Revu (162 markups, 156 with review status):
+  every sheet opens, renders and keeps its appearance and annotation counts after saving, and
+  editing text, setting status, undo and delete work on its callouts. Real files taught us that
+  Civil 3D plots add hundreds of read-only "AutoCAD SHX Text" boxes (hidden here), that Revu stores a
+  callout's cloud and arrow as grouped parts of the callout (shown as one markup), and that Revu keeps a
+  rich-text copy of each note (kept in step on edit). **Still unverified in Revu itself**: that
+  Revu opens the edited file and shows the edits and statuses as expected.
 - Single server process only: edits are serialised with an in-process lock per drawing, and the
   login throttle is in memory. Running several workers would need file locks and a shared throttle.
 - Serve over HTTPS and set `REDLINE_SECURE_COOKIES=1` before exposing it. There is no password
   reset, email, roles beyond owner/member, or admin screen yet.
-- Undo can restore clouds, text boxes and stamps. Other markup types made in Revu (highlights,
-  lines, ...) can be edited and undone, but deleting one is permanent; the viewer says so.
+- Markups made in Revu or other programs can have their text and review status changed, but not
+  moved, resized or recoloured here (rebuilding them could lose properties). Only clouds, text boxes
+  and stamps made in Redline can be moved or resized, and only those can be restored by undo after a
+  delete. Deleting a Revu markup is permanent; the viewer says so.
+- Revu auto-grows a note's box when text gets longer; Redline can't, so it warns when new text
+  probably won't fit.
 - Two people editing the same markup at once: last write wins.
 - Revision clouds carry the cloud border-effect key (`/BE`), but the stored appearance is a plain
   polygon, so Revu may redraw the scallops on first edit.
