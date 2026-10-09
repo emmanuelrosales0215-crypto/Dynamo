@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redline"
+version = "0.1.0"
+description = "Redline civil construction drawing PDFs and exchange markups with Bluebeam"
+requires-python = ">=3.10"
+dependencies = ["pymupdf>=1.24.3", "fastapi>=0.110", "httpx>=0.27", "python-multipart>=0.0.9", "anthropic>=1.0"]
+
+[project.optional-dependencies]
+dev = ["pytest", "uvicorn"]
+
+[tool.setuptools]
+packages = ["redline"]
+
+[tool.setuptools.package-data]
+redline = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["redline/tests"]
